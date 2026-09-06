@@ -1,0 +1,247 @@
+{
+ "name": "hatch-inc-2419-rollout-outage",
+ "category": "System debugging / production-incident remediation (production container orchestration)",
+ "title": "INC-2419: bring the Hatch workload controller's rollout, probe and termination logic into conformance with HWC-SPEC 2.3",
+ "summary": "The workspace is \"hatch\", a single-node workload controller written in pure Python (stdlib + PyYAML) that plays the role of a minimal Kubernetes-style orchestrator: it reads Deployment manifests, spawns workload processes (real subprocesses serving HTTP on localhost), probes them, performs rolling updates between ReplicaSets, drains and terminates pods, and publishes an endpoints file consumed by an edge proxy. It keeps state in sqlite and is driven by an injectable clock through a `reconcile_once()` tick. A written spec, docs/spec/HWC-SPEC-2.3.md, defines the rollout budget arithmetic, the startup/readiness/liveness probe state machine, restart/backoff policy, the graceful termination sequence, the endpoints-file contract and rollout status conditions. A production incident (INC-2419) took the checkout API to zero endpoints during a v41\u2192v42 rollout, then produced a restart storm; the postmortem lists what was observed, but the controller actually deviates from the spec in more places than the postmortem enumerates (percent-string mis-parse plus floor/ceil asymmetry and the both-zero rule in the strategy resolver, \"available\" counted as Running instead of Ready, readiness failures routed into the restart path, no startup-probe gating, successThreshold ignored, termination doing SIGKILL immediately with endpoints drained after the kill and preStop never run, backoff never capped or reset, endpoints file listing non-ready pods and written non-atomically, rollout marked Complete before availability). The agent must diagnose the root causes across the strategy, lifecycle, termination, backoff, endpoints and status modules and make the whole controller conform to spec \u00a73-\u00a78, verified by a replay tool that must show no availability dip during the incident's rollout and a Complete rollout at the end.",
+ "real_world_grounding": "This mirrors the classic class of orchestrator outages: a rolling update that violates its own maxUnavailable budget, readiness flaps misclassified as liveness failures causing CrashLoopBackOff storms, and non-graceful termination that drops in-flight traffic because the load balancer is updated after the process is killed. The evidence trail in the workspace consists of: (1) docs/spec/HWC-SPEC-2.3.md, a ~250-line normative spec (numbered sections, MUST/MUST NOT language, worked examples of the surge/unavailable rounding table, the probe state machine, the 5-step termination sequence, the endpoints JSON schema and the rollout condition table); (2) docs/incidents/INC-2419-postmortem.md, a timeline of the 2026-08-27 outage with pasted `hatchctl status --json` and `hatchctl events` excerpts showing four `Killing` events in one reconcile tick, `Unhealthy(readiness)` immediately followed by `Killing`, endpoints listing already-dead pods, and a rollout reported \"Complete\" while zero pods were ready; (3) docs/incidents/INC-2419-events.jsonl, the exported production events table (~90 rows) the agent can cross-reference against the spec's event-ordering rules; (4) manifests/checkout-api-v41.yaml and -v42.yaml, the real production Deployment manifests (replicas 4, maxSurge \"25%\", maxUnavailable \"25%\", startup/readiness/liveness probes with thresholds, preStop hook, terminationGracePeriodSeconds 30, progressDeadlineSeconds 300); (5) tools/replay_incident.py, a reproducer that replays the v41\u2192v42 rollout with a ManualClock and scripted workload behaviour and currently prints the outage (endpoints drop to 0, restart storm, premature Complete); (6) a docs/CHANGELOG.md entry showing the percent-string strategy support and the \"fast-kill\" termination shortcut were added in the two releases before the incident, which is a realistic hint of where regressions entered.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "hatch/__init__.py",
+    "purpose": "Package marker and version string.",
+    "approx_loc": 5
+   },
+   {
+    "path": "hatch/clock.py",
+    "purpose": "Clock protocol with now()/sleep(); MonotonicClock (production) and ManualClock (advance(seconds)) used by the CLI, replay tool and tests.",
+    "approx_loc": 45
+   },
+   {
+    "path": "hatch/manifest.py",
+    "purpose": "Load and validate Deployment manifests (YAML): replicas, strategy, template (image command/args/env, probes, preStop, terminationGracePeriodSeconds, restartPolicy), progressDeadlineSeconds; applies spec defaults; computes deterministic ReplicaSet hash (sha1 of canonical template JSON).",
+    "approx_loc": 130
+   },
+   {
+    "path": "hatch/runtime/process_runtime.py",
+    "purpose": "Spawns a workload as a subprocess with env (HATCH_POD, HATCH_DEPLOYMENT), reads the child's first stdout line `LISTENING <port>` (child binds port 0) with a bounded real-time wait, tracks Popen handles by pod name, exposes poll/exit code, send_signal(SIGTERM/SIGKILL), is_alive, and shutdown_all.",
+    "approx_loc": 140
+   },
+   {
+    "path": "hatch/runtime/hooks.py",
+    "purpose": "Runs lifecycle hook commands (preStop) synchronously with the pod's env and a timeout; returns exit status and captures output for the event log.",
+    "approx_loc": 45
+   },
+   {
+    "path": "hatch/health/prober.py",
+    "purpose": "Performs one HTTP GET probe against 127.0.0.1:<port><path> with http.client and a short timeout; maps 2xx to success, anything else (or connection error) to failure; returns ProbeResult.",
+    "approx_loc": 65
+   },
+   {
+    "path": "hatch/health/probe_state.py",
+    "purpose": "Per-pod probe bookkeeping: consecutive success/failure counters for startup, readiness and liveness; startup_passed flag; ready flag; ready_since timestamp. BUGGY: startup never gates readiness/liveness, successThreshold is ignored (ready on first success), counters are not reset on the opposite outcome.",
+    "approx_loc": 85
+   },
+   {
+    "path": "hatch/controller/reconciler.py",
+    "purpose": "Controller class: apply(manifest_path), reconcile_once(), close(). One tick = reap exited processes, probe every running pod once, apply lifecycle decisions, compute rollout budgets and scale ReplicaSets, drive terminations, refresh endpoints, update rollout status. Pods processed in sorted-name order.",
+    "approx_loc": 190
+   },
+   {
+    "path": "hatch/controller/pod_lifecycle.py",
+    "purpose": "Phase transitions (Pending -> Starting -> Running -> Ready/NotReady -> Terminating -> Exited/Succeeded/Failed/CrashLoopBackOff), handling of probe results and process exits under restartPolicy. BUGGY: readiness failure calls the restart path; liveness evaluated during startup; OnFailure treats exit 0 as failure.",
+    "approx_loc": 160
+   },
+   {
+    "path": "hatch/controller/termination.py",
+    "purpose": "Graceful termination sequence for a pod. BUGGY: sends SIGKILL immediately when the 'fast-kill' flag (default on) is set, never runs preStop, drains endpoints after signalling, grace deadline compared with wrong unit so SIGKILL fires on the same tick, exit code recorded as 0.",
+    "approx_loc": 95
+   },
+   {
+    "path": "hatch/controller/backoff.py",
+    "purpose": "CrashLoop backoff schedule and reset policy. BUGGY: doubling without the 300s cap and no reset after 600s of continuous readiness; restart_count only reset on manual delete.",
+    "approx_loc": 40
+   },
+   {
+    "path": "hatch/rollout/strategy.py",
+    "purpose": "Resolves maxSurge/maxUnavailable (int or 'N%') into absolute numbers and computes per-tick scale-up and scale-down budgets. BUGGY: 'N%' parsed with int(s.rstrip('%')) and used as an absolute count; rounding direction inverted; both-zero rule missing; availability counted as phase==Running rather than Ready.",
+    "approx_loc": 85
+   },
+   {
+    "path": "hatch/rollout/status.py",
+    "purpose": "Computes rollout conditions (Progressing, Available, Complete, ProgressDeadlineExceeded) and the summary shown by hatchctl status. BUGGY: Complete when updated_replicas == replicas regardless of readiness or old-RS count; progress deadline never evaluated; last_progress_time never updated.",
+    "approx_loc": 85
+   },
+   {
+    "path": "hatch/store/db.py",
+    "purpose": "sqlite schema and DAO: deployments, replicasets, pods (name, rs, phase, ready, port, pid, restart_count, exit_code, ready_since, backoff_until), events (seq autoincrement, ts, pod, deployment, reason, message); query helpers used by CLI and tests.",
+    "approx_loc": 160
+   },
+   {
+    "path": "hatch/store/endpoints.py",
+    "purpose": "Writes var/run/endpoints/<deployment>.json for the edge proxy. BUGGY: selects pods with phase in (Running, Ready) instead of ready==True and writes in place (open/write) rather than temp+os.replace.",
+    "approx_loc": 45
+   },
+   {
+    "path": "hatch/cli.py",
+    "purpose": "hatchctl entry point (python -m hatch.cli): apply, status [--json], events [--pod], tick [--n], run (loop with MonotonicClock), delete; --root selects the state directory.",
+    "approx_loc": 130
+   },
+   {
+    "path": "fixtures/images/webapp.py",
+    "purpose": "Stand-in for the production image: stdlib http.server on port 0, prints LISTENING <port>, serves /startupz /readyz /healthz according to a WEBAPP_SCRIPT env string with probe-count-based directives (e.g. 'startup:2,ready:3,flap:5-7,live_fail_from:9,ignore_term,exit_after:4:3'); SIGTERM handling per script. Read-only for the agent.",
+    "approx_loc": 130
+   },
+   {
+    "path": "tools/replay_incident.py",
+    "purpose": "Reproduces INC-2419: applies v41 with ManualClock, ticks until 4 Ready, applies v42 with the scenario script, ticks while recording endpoint count per tick and events; prints min endpoints during rollout, restart counts, and final rollout condition.",
+    "approx_loc": 95
+   },
+   {
+    "path": "tests_local/test_manifest_smoke.py",
+    "purpose": "The team's existing (passing) smoke tests for manifest parsing and the ManualClock, so the agent sees how the public API is exercised; not part of the hidden verifier.",
+    "approx_loc": 40
+   }
+  ],
+  "data_files": [
+   {
+    "path": "docs/spec/HWC-SPEC-2.3.md",
+    "description": "Normative spec: \u00a72 manifest fields and defaults; \u00a73 rolling update budgets (ceil for maxSurge, floor for maxUnavailable, both-zero -> maxUnavailable=1, availability means Ready, invariants for scale-down and scale-up); \u00a74 probes (startup gating, consecutive successThreshold/failureThreshold, readiness never restarts); \u00a75 restart policy and backoff (10s*2^(n-1) capped 300s, reset after 600s continuous Ready, CrashLoopBackOff phase, BackOff event); \u00a76 termination sequence (drain -> preStop -> SIGTERM -> grace -> SIGKILL, exit code recording, event order); \u00a77 endpoints file schema, ready-only, atomic write; \u00a78 rollout conditions and progress deadline; \u00a79 event reason codes."
+   },
+   {
+    "path": "docs/incidents/INC-2419-postmortem.md",
+    "description": "Incident timeline with pasted hatchctl outputs, the list of observed deviations, impact numbers, and action item 'bring controller into conformance with HWC-SPEC 2.3 \u00a73-\u00a78; reviewers flagged additional deviations not exercised by this incident'."
+   },
+   {
+    "path": "docs/incidents/INC-2419-events.jsonl",
+    "description": "~90 exported production events (seq, ts, pod, reason, message) showing four Killing events in one tick, Unhealthy(readiness) followed by Killing, no Draining/PreStop events, BackOff delays growing past 300s, and RolloutComplete emitted while zero pods Ready."
+   },
+   {
+    "path": "docs/CHANGELOG.md",
+    "description": "Release notes for 2.1-2.3 mentioning 'support percentage strategy values' and 'fast-kill termination to speed up rollouts' as recent changes."
+   },
+   {
+    "path": "manifests/checkout-api-v41.yaml",
+    "description": "Production manifest: replicas 4, RollingUpdate maxSurge '25%' maxUnavailable '25%', startup/readiness/liveness probes with thresholds, preStop hook (sh -c copying the endpoints file into var/hooks), terminationGracePeriodSeconds 30, progressDeadlineSeconds 300, image command pointing at fixtures/images/webapp.py."
+   },
+   {
+    "path": "manifests/checkout-api-v42.yaml",
+    "description": "Same as v41 with a changed env (APP_VERSION=42, WEBAPP_SCRIPT with slower startup) producing a different ReplicaSet hash."
+   },
+   {
+    "path": "manifests/examples/batch-indexer.yaml",
+    "description": "Example Deployment with restartPolicy OnFailure and no probes, used in docs to illustrate \u00a75."
+   },
+   {
+    "path": "manifests/examples/edge-proxy.yaml",
+    "description": "Example with absolute maxSurge 1 / maxUnavailable 0 illustrating \u00a73 worked example."
+   },
+   {
+    "path": "fixtures/scenarios/inc-2419.yaml",
+    "description": "Scenario used by tools/replay_incident.py: WEBAPP_SCRIPT strings for v41 pods (ready:1) and v42 pods (startup:3,ready:2,flap:6-8), and the tick schedule."
+   },
+   {
+    "path": "README.md",
+    "description": "How to run hatchctl, the state directory layout (var/state.db, var/run/endpoints, var/hooks, var/log), the public Python API (Controller(root, clock), apply, reconcile_once, close; ManualClock), and how to run the replay tool."
+   }
+  ],
+  "pip_deps": [
+   "pytest==8.4.1",
+   "pytest-timeout==2.3.1",
+   "PyYAML==6.0.2"
+  ]
+ },
+ "instruction_outline": "Framed as the INC-2419 follow-up ticket assigned to the agent. Context: hatch is the workload controller; on 2026-08-27 the checkout-api v41->v42 rollout produced a full outage and a restart storm; the postmortem is in docs/incidents/, the exported events are alongside, and docs/spec/HWC-SPEC-2.3.md \u00a73-\u00a78 is the authoritative behaviour. Task: audit the controller against \u00a73-\u00a78 and fix every deviation (the postmortem's observed-deviations list is what the incident exercised; code review found further deviations in the same sections, so treat the spec, not the postmortem, as the checklist). Concrete acceptance stated in the ticket: `python tools/replay_incident.py` must report that the endpoints file never listed fewer than 3 ready pods during the rollout, zero restarts, and a final rollout condition Complete; rolling updates must respect the \u00a73 budgets computed from Ready pods for any replicas/percentage combination including the both-zero rule; readiness failures must only remove a pod from the endpoints (no restart) and Ready must require successThreshold consecutive successes; startup probes gate readiness/liveness; liveness failures restart with the \u00a75 backoff schedule, cap and reset; termination must follow the \u00a76 sequence with the events in that order, honour terminationGracePeriodSeconds on the controller clock, run preStop after draining, and record the real exit status; the endpoints file must contain only Ready pods and be written atomically; rollout status must implement \u00a78 conditions including ProgressDeadlineExceeded, during which old pods keep serving. Constraints: keep the public Python API documented in README (Controller(root, clock), apply(path), reconcile_once(), close(), ManualClock), the hatchctl commands and their --json output keys, the sqlite schema, and the endpoints file path/schema stable; do not modify fixtures/images/webapp.py (it stands in for the production image) or the manifests under manifests/. Existing tests_local suite must keep passing. No mention of hidden tests, reward files or the reference solution.",
+ "required_changes": [
+  "\u00a73 strategy resolution: parse 'N%' as a percentage of replicas; maxSurge rounds up, maxUnavailable rounds down; when both resolve to 0, maxUnavailable becomes 1; integer values are used as-is.",
+  "\u00a73 budgets: 'available' means pods whose readiness gate is passed (ready==True), not phase Running; old pods may only be terminated while ready_total - to_kill >= replicas - maxUnavailable; new pods may only be created while non-terminated_total + to_create <= replicas + maxSurge; prefer terminating NotReady old pods first.",
+  "\u00a74 startup gating: while a startup probe is configured and has not yet succeeded, readiness and liveness are not evaluated; startup failing failureThreshold consecutive times triggers a restart under \u00a75.",
+  "\u00a74 readiness: Ready only after successThreshold consecutive successes; NotReady after failureThreshold consecutive failures; readiness failure never restarts the process; counters reset on the opposite outcome; Ready/NotReady transitions emit Ready/NotReady events and refresh endpoints.",
+  "\u00a74 liveness: failureThreshold consecutive failures -> Unhealthy event and restart via \u00a75; success resets the failure counter.",
+  "\u00a75 restart policy: Always restarts on any exit; OnFailure restarts only on non-zero exit (zero -> Succeeded, no restart); Never -> Succeeded/Failed. Backoff delay 10s*2^(restart_count-1) capped at 300s measured on the controller clock, phase CrashLoopBackOff and BackOff event while waiting; restart_count and backoff reset after 600s of continuous Ready.",
+  "\u00a76 termination sequence: mark Terminating and remove from endpoints (rewrite file, Draining event) BEFORE any signal; run preStop hook synchronously with HATCH_POD/HATCH_PORT env (PreStop event); SIGTERM (Killing event); SIGKILL only after terminationGracePeriodSeconds on the controller clock if still alive (Killed event); record the real returncode (negative signal number for signal deaths) and final phase.",
+  "\u00a77 endpoints file: var/run/endpoints/<deployment>.json contains only Ready, non-Terminating pods sorted by pod name with address 127.0.0.1 and the runtime-reported port; rewritten via temp file + os.replace whenever the ready set changes; always valid JSON with the documented keys.",
+  "\u00a78 rollout status: Available true iff ready >= replicas - maxUnavailable; Complete only when updated ReplicaSet has replicas Ready pods and old ReplicaSets have 0 pods (RolloutComplete event once); Progressing tracks last progress time (new Ready pod of the updated RS or scale event); if no progress for progressDeadlineSeconds -> Progressing=False with reason ProgressDeadlineExceeded and event, the controller must stop scaling down old pods (they keep serving) and must not report Complete.",
+  "Cross-cutting: pods are processed in deterministic name order; every state change is persisted in sqlite so hatchctl status --json and the events table reflect the above; tools/replay_incident.py output reflects the corrected behaviour without being edited."
+ ],
+ "solution_plan": [
+  {
+   "file": "hatch/rollout/strategy.py",
+   "change": "Rewrite resolve_strategy: detect percentage strings, compute ceil for surge and floor for unavailable, apply both-zero rule, validate ints; compute_budgets takes ready counts (ready==True and not Terminating) rather than phase Running; return scale_up and scale_down allowances honouring both invariants; order candidates NotReady-first.",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "hatch/health/probe_state.py",
+   "change": "Add startup_passed gating, consecutive counters with reset on opposite outcome, successThreshold/failureThreshold evaluation for readiness, failureThreshold for liveness and startup; return transition enums (BecameReady, BecameNotReady, LivenessFailed, StartupFailed) instead of raw booleans.",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "hatch/controller/pod_lifecycle.py",
+   "change": "Route probe transitions correctly: readiness -> ready flag + endpoints refresh + Ready/NotReady events only; liveness/startup failure -> restart path; skip readiness/liveness until startup passed; implement restartPolicy semantics on exit including Succeeded for exit 0 under OnFailure; set ready_since; invoke backoff scheduling; persist changes.",
+   "approx_loc_changed": 60
+  },
+  {
+   "file": "hatch/controller/termination.py",
+   "change": "Implement the 5-step sequence: drain endpoints and emit Draining first; run preStop via hooks with env and timeout bounded by grace; SIGTERM + Killing; store term_deadline = clock.now() + grace on the pod; on subsequent ticks poll; SIGKILL + Killed when deadline passed; record real returncode and final phase; remove the fast-kill flag.",
+   "approx_loc_changed": 55
+  },
+  {
+   "file": "hatch/controller/backoff.py",
+   "change": "Add 300s cap, compute delay from restart_count, add reset rule when ready_since + 600 <= now, expose next_restart_at for CrashLoopBackOff handling.",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "hatch/store/endpoints.py",
+   "change": "Select ready and non-Terminating pods only, sort by pod name, write to <file>.tmp then os.replace; only rewrite when content changed (return bool for event emission).",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "hatch/rollout/status.py",
+   "change": "Compute Available from ready count and resolved maxUnavailable; Complete only with updated-ready == replicas and old pods == 0; track last_progress_time in the deployments table; evaluate progressDeadlineSeconds on the controller clock; set ProgressDeadlineExceeded and emit event once; expose a flag the reconciler uses to freeze old-RS scale-down.",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "hatch/controller/reconciler.py",
+   "change": "Wire the corrected budgets (pass ready counts), call termination step for pods already Terminating each tick, honour the progress-deadline freeze, refresh endpoints after readiness changes and before signalling, handle CrashLoopBackOff wake-ups by clock, and reset restart counters via backoff.maybe_reset.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "hatch/store/db.py",
+   "change": "Add columns last_progress_time (deployments) and term_deadline (pods) with schema migration-on-open, plus helpers to fetch ready counts per ReplicaSet.",
+   "approx_loc_changed": 15
+  }
+ ],
+ "estimated_total_loc_changed": 320,
+ "test_strategy": {
+  "approach": "Hidden pytest suite drives the controller exclusively through the documented public API (Controller(root=tmp_path, clock=ManualClock()), apply(), reconcile_once(), close()) plus `python -m hatch.cli status --json`/`events`, and observes only externally visible state: the sqlite tables (pods phase/ready/restart_count/exit_code, events seq/reason order), the endpoints JSON file, files written by preStop hooks, and the real OS processes (pid liveness). Tests ship their OWN copy of the workload fixture under /tests and their own manifests (different replica counts, percentages, thresholds and WEBAPP_SCRIPT strings than the workspace uses), so they are immune to edits of fixtures/ and to memorised scenario values. Scenarios: (a) parametrised rollout invariant test over (replicas, maxSurge, maxUnavailable) in {(4,'25%','25%'), (3,0,1), (5,'50%',0), (2,'10%','10%'), (6,'34%','20%')} with new pods scripted never-ready: at every tick assert ready_old >= replicas - expected_unavailable and non_terminated_total <= replicas + expected_surge, where expected values come from an oracle in the test implementing the spec's ceil/floor/both-zero rules; (b) full rollout with new pods becoming ready after 2 probes: endpoints count never below replicas - maxUnavailable, final state updated RS all Ready, old RS empty, status Complete, RolloutComplete event exactly once, and each old pod's events show Draining < PreStop < Killing by seq; (c) readiness flap: pod removed from endpoints while failing, restart_count stays 0, no Killing event, returns to Ready only after successThreshold=2 consecutive successes (assert exact probe index at which Ready reappears); (d) startup gating: startup fails 6 times with startup failureThreshold 10 and liveness failureThreshold 1 -> no restart, eventually Ready; startup failureThreshold 3 with script failing forever -> restart with BackOff; (e) liveness: fails from probe 5 with failureThreshold 3 -> Unhealthy then restart at the 7th probe; successive restarts scheduled at clock offsets 10,20,40 (assert phase CrashLoopBackOff until the ManualClock is advanced past the delay, then Starting); cap: after 6 restarts delay is 300 not 320; reset: after 600s continuous Ready, next failure yields delay 10 and restart_count 1; (f) termination: pod scripted to ignore SIGTERM, grace 30 -> after the terminating tick the pid is still alive (checked with os.kill(pid,0) after a short real wait), no Killed event; advance clock 29s -> still alive; advance 1s more + tick -> process gone within a bounded real-time poll, Killed event, exit_code == -9, phase Failed/Exited per spec; pod scripted to exit 0 on SIGTERM -> exits, no Killed event, exit_code 0; the preStop hook (sh -c cp of the endpoints file) snapshot must not contain the terminating pod; (g) endpoints contract: at every tick of every scenario the file parses as JSON with the documented keys, entries sorted by pod name, contains exactly the pods whose DB row is ready and not Terminating, no leftover .tmp files in the directory at rest; (h) restartPolicy: OnFailure with script exit_after:N:0 -> phase Succeeded and never respawned (pid unchanged/gone), exit code 3 -> restarted; Never -> Failed no restart; (i) progress deadline: new pods never ready, progressDeadlineSeconds 60 -> after advancing 61s ProgressDeadlineExceeded event and condition present in status --json, Complete false, old pods still Ready and still in endpoints, no further old-pod Killing after the deadline; (j) CLI smoke: status --json exposes replicas/ready/updated/conditions and events lists reasons in seq order. Every test uses a fresh tmp root and a fixture that calls controller.close() and kills any leftover child pids.",
+  "invariants_checked": [
+   "For every tick during a rollout: ready pods across all ReplicaSets >= replicas - floor/int(maxUnavailable) (with both-zero -> 1), non-terminated pods <= replicas + ceil/int(maxSurge).",
+   "Endpoints file at every tick == set of pods with ready==True and phase != Terminating, sorted by name, valid JSON with the spec's keys.",
+   "Readiness failures never increment restart_count or produce Killing/Unhealthy(liveness) events; Ready requires successThreshold consecutive successes.",
+   "No readiness/liveness evaluation before startup probe success (no restart despite liveness failureThreshold 1 during a 6-probe startup).",
+   "Restart delays follow 10*2^(n-1) capped at 300, measured on the injected clock, with reset after 600s continuous Ready.",
+   "Per-pod event order by seq: Draining < PreStop < Killing (< Killed only when grace expired); SIGKILL never before grace elapsed on the controller clock; real process death observed via pid.",
+   "Recorded exit_code equals the real returncode (0 for clean exit, -9 for SIGKILL); restartPolicy semantics on exit 0 vs non-zero.",
+   "Rollout Complete iff updated RS has replicas Ready and old RS empty; ProgressDeadlineExceeded after the deadline with old pods kept serving."
+  ],
+  "anti_overfit_measures": [
+   "Tests exercise only the pre-existing public API documented in README and CLI JSON output; no imports of internal modules such as strategy/probe_state/termination, so any internal restructuring passes.",
+   "Expected budgets are computed by an independent oracle in the test from the spec formulas, over parameter sets that differ from every manifest in the workspace (including a 6-replica '34%'/'20%' case).",
+   "Ordering assertions use the events table's seq only for the spec-mandated relative order (Draining < PreStop < Killing < Killed); no assertions on message text, on the exact tick a pod is scheduled, or on which Ready old pod is killed first (only NotReady-first is checked where the spec mandates it).",
+   "Real-time waits are bounded polls (up to 5s) around process death/exit observation; all durations of semantic significance come from the ManualClock.",
+   "Tests bring their own webapp fixture and manifests, so edits to fixtures/ or manifests/ neither help nor hurt; CLI tests check key presence and values, not formatting.",
+   "Endpoint atomicity is checked only via always-parseable JSON and absence of leftover temp files, not via a specific temp naming scheme."
+  ],
+  "pre_apply_failure_reason": "With the shipped code the rollout invariant test fails immediately because '25%' is parsed as an absolute 25 and availability counts Running pods, so all old pods are terminated in one tick (ready count drops to 0 < replicas - 1); the readiness test fails because a readiness failure triggers a restart (restart_count 1, Killing event); the termination test fails because SIGKILL is sent on the terminating tick (pid dead before the grace period, no Draining/PreStop events, exit_code recorded 0); the endpoints test fails because NotReady Running pods appear in the file; the status test fails because Complete is reported while zero updated pods are Ready and ProgressDeadlineExceeded never appears; the backoff test fails on the missing 300s cap and reset. tools/replay_incident.py prints min endpoints 0 and Complete prematurely."
+ },
+ "difficulty_rationale": "Hard for a mid-tier model because the visible symptoms (postmortem) point at the percent parse and the fast-kill flag, and patching just those leaves eight further spec deviations that only appear when the spec is read closely and the modules are connected: floor/ceil asymmetry and the both-zero rule; availability defined as Ready (which requires fixing probe_state, pod_lifecycle and endpoints consistently, because the reconciler, the budget and the endpoints writer each derive 'ready' differently today); successThreshold as consecutive successes; startup gating; the strict drain -> preStop -> SIGTERM -> grace -> SIGKILL order with a deadline stored across ticks on an injected clock; backoff cap/reset; and Complete/ProgressDeadlineExceeded semantics interacting with the scale-down freeze. It also involves real systems work: subprocess lifecycle, signals, exit-code recording, sqlite persistence and an atomic file protocol, all under a manual clock, where a naive fix (e.g. time.sleep for grace or polling wall-clock) breaks determinism and the tests. A frontier model can finish in one session because the codebase is ~1600 lines, the spec is explicit and numbered, the replay tool gives immediate feedback, and each fix is a local, well-scoped rewrite of a module once the semantics are understood; total change ~320 lines across 9 files.",
+ "determinism_notes": "All semantic time flows through the injected Clock (ManualClock in the replay tool and tests; MonotonicClock only in `hatchctl run`). Exactly one probe per running pod per reconcile tick, and the workload fixture scripts its /startupz /readyz /healthz answers by probe count, so readiness/liveness sequences are reproducible. The runtime blocks (bounded real-time wait, 10s) on the child's `LISTENING <port>` line before the pod enters Starting, so port binding latency never changes probe counts; ports are allocated by binding 0 in the child, avoiding collisions. Pod names derive from a sha1 of the canonical template plus ordinal, pods are processed in sorted order, and sqlite event seq is autoincrement, so event order is stable. Process death after SIGKILL/SIGTERM is observed via bounded real-time polls that only need the OS to reap a child, not a specific timing. No network beyond 127.0.0.1, no wall-clock reads in controller logic, no randomness anywhere; pytest-timeout guards against hangs, and each test uses an isolated tmp root and kills leftover children in teardown.",
+ "risks": [
+  "Subprocess-heavy tests could be slow or leak zombies on an overloaded runner; mitigated by small replica counts (<=6), reuse of one fixture process per pod, Controller.close() killing all children, and generous but bounded real-time polls.",
+  "The runtime's bounded wait for the LISTENING line depends on Python startup time (~50-100 ms); the 10s bound is ample but must not be shortened by the implementer.",
+  "The spec must be written unambiguously (rounding, consecutive counters, 'available' definition, where the grace deadline is measured) or an equally valid reading could fail a test; the spec should include worked examples for the exact cases the tests parametrise in spirit (but with different numbers).",
+  "The instruction must clearly pin the public API and DB/endpoints schema as stable so tests using them are fair; if the agent renames Controller methods the tests fail legitimately, and this must be stated.",
+  "Balancing difficulty: if the postmortem lists too many deviations verbatim the task becomes a checklist; it should list the four observed ones and defer the rest to 'audit against \u00a73-\u00a78'.",
+  "The implementer must ensure the buggy codebase still runs end-to-end (replay tool prints the outage rather than crashing) so the agent gets a working reproducer.",
+  "Signal semantics rely on Linux (SIGTERM/SIGKILL, negative returncodes), which the python:3.11-slim image provides; /bin/sh must exist for the preStop hook (it does in Debian slim)."
+ ]
+}

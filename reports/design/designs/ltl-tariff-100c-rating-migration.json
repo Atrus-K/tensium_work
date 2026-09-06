@@ -1,0 +1,255 @@
+{
+ "name": "ltl-tariff-100c-rating-migration",
+ "category": "Operations: implementation of real business rules (logistics)",
+ "title": "Migrate the Northline LTL freight rating engine from Rules Tariff 100-B to 100-C",
+ "summary": "The codebase is a small 3PL rating engine (Python package `northline`) that prices LTL freight shipments against a regional carrier's tariff: it loads a per-lane, per-class rate base from CSV, resolves ZIP3 prefixes to rating zones, pulls customer pricing agreements (discount, absolute minimum charge, FAK) from a sqlite database, looks up a fuel surcharge from a DOE diesel index, adds accessorials, and writes a rated batch CSV through a CLI. The engine faithfully implements the carrier's retired Rules Tariff 100-B; the carrier switched to Rules Tariff 100-C effective 2026-01-05 and a finance reconciliation (ticket RATE-4821) shows 23 of 60 quoted shipments no longer match carrier invoices to the cent. The complete 100-C rules tariff (density-based classification with dimension round-up, highest-class rule, FAK, cubic-capacity deemed weight, deficit weight rating with lane minimum, discount/AMC ordering, Monday-effective weekly fuel surcharge, accessorial bases with min/max and automatic over-length, half-up cent rounding, rejection codes) lives in docs/ with worked examples and a change appendix. The agent must bring the engine into compliance with 100-C across the classification, weight-break, fuel, accessorial, contract, shipment I/O and orchestration modules so that the batch CLI reproduces carrier invoices for the sample week and for unseen shipments, emits the new audit columns, and rejects unratable shipments with the documented codes without aborting the rest of the batch.",
+ "real_world_grounding": "Tariff migrations are routine, error-prone work at freight brokers and 3PLs: a carrier publishes a new rules tariff and the in-house rating engine has to be reconciled against actual carrier invoices until totals match to the cent, because accounts payable auto-approves only on match. Every rule in the spec is a real LTL industry practice (NMFC density sub-classes with dimensions rounded up to the whole inch, rate-at-highest-class for mixed shipments, FAK provisions in pricing agreements, cubic capacity / deemed-weight rules, deficit weight rating against higher weight breaks, absolute minimum charge applied after discount, DOE-index-driven weekly fuel surcharge tables, accessorials with per-cwt bases and floors/ceilings, automatic over-length charges). Evidence trail in the workspace: docs/tariff/NRC-100-C_rules_tariff.md (the carrier tariff, items 100/110/170/300/500/600/640/750/780/990/995 with five worked examples and an Appendix A summary of changes from 100-B); docs/tickets/RATE-4821.md (finance ticket: 23/60 mismatches on week 2026-W05, must match to the cent, requests new audit columns rated_weight/weight_break/amc_applied/fuel_pct); docs/tickets/RATE-4830.md (CSR report that a Sunday 2026-02-01 pickup was quoted with the fuel percentage that only took effect Monday 2026-02-02); audit/carrier_invoices_2026w05.csv (the carrier's invoiced linehaul/fuel/accessorial/total for the 60 sample shipments); audit/reconcile.py (existing script that prints the mismatch list, currently reporting 23 mismatches); a CHANGELOG.md entry noting the engine was last validated against 100-B in 2024.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "northline/__init__.py",
+    "purpose": "Package marker, version string",
+    "approx_loc": 5
+   },
+   {
+    "path": "northline/models.py",
+    "purpose": "Dataclasses: HandlingUnit (qty, L/W/H inches optional), LineItem (nmfc_item, declared_class, weight_lb, handling units), Shipment (id, customer_code, pickup_date, origin_zip3, dest_zip3, accessorial codes, hazmat flag, lines), Contract (discount_pct, amc, fak range), RatingResult (status, components). Pre-fix RatingResult lacks rated_weight, weight_break, amc_applied, fuel_pct, reject_reason.",
+    "approx_loc": 120
+   },
+   {
+    "path": "northline/zones.py",
+    "purpose": "Loads data/zones.csv (zip3 -> zone 1..8); lookup raising KeyError for unknown zip3 (pre-fix engine lets this propagate and abort the batch).",
+    "approx_loc": 50
+   },
+   {
+    "path": "northline/rate_base.py",
+    "purpose": "Loads data/rate_base_2026.csv (origin_zone, dest_zone, class, MIN, L5C, M5C, M1M, M2M, M5M, M10M) into a (lane, class) -> RateRow lookup; class code normalization (77.5, 92.5).",
+    "approx_loc": 110
+   },
+   {
+    "path": "northline/commodities.py",
+    "purpose": "Loads data/nmfc_items.json: nmfc item number -> description, default class, density_based flag. Pre-fix ignores the density_based flag.",
+    "approx_loc": 60
+   },
+   {
+    "path": "northline/classification.py",
+    "purpose": "Cube and density computation and density -> class table (Item 110), plus Item 640 highest-class rule and Item 780 cubic-capacity evaluation. Pre-fix: computes cube from raw inches, per-line density not implemented (always returns declared class), table bounds off (upper inclusive), no 640/780.",
+    "approx_loc": 80
+   },
+   {
+    "path": "northline/weight_breaks.py",
+    "purpose": "Picks the weight break for an actual weight and computes gross linehaul. Pre-fix: straight break rating only (100-B), no deficit weight rating, no lane MIN floor.",
+    "approx_loc": 60
+   },
+   {
+    "path": "northline/pricing_db.py",
+    "purpose": "sqlite access to data/pricing.db: contracts(customer_code, discount_pct, amc), fak(customer_code, min_class, max_class, rate_as). Pre-fix reads discount and amc only and does not join fak rows.",
+    "approx_loc": 90
+   },
+   {
+    "path": "northline/fuel.py",
+    "purpose": "Loads data/fuel_index.csv (effective_monday, doe_price) and data/fuel_surcharge_table.csv (price_low, price_high, pct). Pre-fix: picks the index row nearest to pickup date (100-B monthly semantics), band bounds inclusive on both ends, raises on missing index.",
+    "approx_loc": 70
+   },
+   {
+    "path": "northline/accessorials.py",
+    "purpose": "Loads data/accessorials.csv (code, basis FLAT|PER_CWT|PCT_LINEHAUL, rate, min, max) and computes requested accessorial charges. Pre-fix: treats every code as FLAT, ignores min/max, no automatic OVERLENGTH tiers, unknown code raises.",
+    "approx_loc": 90
+   },
+   {
+    "path": "northline/engine.py",
+    "purpose": "Orchestrates rating of one shipment: rates each line separately and sums, applies discount to linehaul plus accessorials, compares AMC after fuel, float arithmetic with Python round(). Must be rewritten to the Item 100 order of application with Decimal half-up rounding and rejection handling.",
+    "approx_loc": 140
+   },
+   {
+    "path": "northline/shipment_io.py",
+    "purpose": "Parses shipments CSV (one row per line item, grouped by shipment_id; dims as 48x40x52 strings, optional; accessorial codes pipe-separated) into Shipment objects; validates dates.",
+    "approx_loc": 90
+   },
+   {
+    "path": "northline/rate_batch.py",
+    "purpose": "CLI: python -m northline.rate_batch --shipments X --out Y [--data-dir data]. Pre-fix writes 7 columns and aborts the whole batch on the first exception.",
+    "approx_loc": 110
+   },
+   {
+    "path": "northline/money.py",
+    "purpose": "Decimal helpers: to_cents half-up, pct application, ceil to whole pound. Pre-fix contains only a float round2 helper.",
+    "approx_loc": 30
+   },
+   {
+    "path": "audit/reconcile.py",
+    "purpose": "Compares a rated output CSV against audit/carrier_invoices_2026w05.csv and prints per-shipment mismatches with component deltas; exit 1 if any mismatch.",
+    "approx_loc": 70
+   },
+   {
+    "path": "scripts/build_pricing_db.py",
+    "purpose": "Builds data/pricing.db from data/contracts.json deterministically (run in the Dockerfile).",
+    "approx_loc": 50
+   },
+   {
+    "path": "tests_local/test_loaders.py",
+    "purpose": "Agent-visible smoke tests for zone/rate-base/commodity/fuel loaders (not the hidden verifier).",
+    "approx_loc": 60
+   }
+  ],
+  "data_files": [
+   {
+    "path": "docs/tariff/NRC-100-C_rules_tariff.md",
+    "description": "The carrier rules tariff (the spec): Item 100 order of application; Item 110 density classification (dims rounded up to whole inch, cube = sum qty*L*W*H/1728 to 4 dp, per-line density = line weight / line cube rounded half-up to 2 dp, 11-band table lower-inclusive/upper-exclusive: <1 400, 1-2 300, 2-4 250, 4-6 175, 6-8 125, 8-10 100, 10-12 92.5, 12-15 85, 15-22.5 70, 22.5-30 65, >=30 60; density applies only to nmfc items flagged density_based; missing dims on such a line -> DIMS_REQUIRED); Item 640 shipment class = highest line class; Item 750 FAK maps classes within [min,max] to rate_as, others unchanged; Item 780 cubic capacity: if total cube >= 750 ft3 and overall density < 6 pcf (only when every HU has dims) rate on deemed weight ceil(cube*6) at the greater of class 125 and the post-FAK class; Item 170 breaks L5C(<500) M5C(500) M1M(1000) M2M(2000) M5M(5000) M10M(10000), charge = weight*rate/100 half-up, deficit rating = min over actual-weight charge and every higher break floor weight * that break rate, then floor at lane MIN, ties resolve to actual weight; Item 600 discount on linehaul only, net = gross - discount, then net = max(net, AMC) with amc_applied flag; Item 300 fuel = net * pct where pct comes from the fuel_surcharge_table band containing the doe_price of the latest effective_monday <= pickup date (Sunday uses prior week, Monday uses same day), no such row -> NO_FUEL_INDEX, price below lowest band -> 0%; Item 500 accessorials on actual weight, never discounted, FLAT / PER_CWT (weight/100*rate) / PCT_LINEHAUL (of net after AMC), each clamped to [min,max] where present, unknown code -> UNKNOWN_ACCESSORIAL, automatic OVERLENGTH when any HU longest dimension >= 96 in: 96-143 -> 85.00, 144-239 -> 185.00, >=240 -> 350.00; Item 990 rounding half-up to the cent at each listed step; Item 995 rejection codes UNKNOWN_ZONE, NO_RATE_BASE, NO_FUEL_INDEX, DIMS_REQUIRED, UNKNOWN_CONTRACT, UNKNOWN_ACCESSORIAL, UNKNOWN_NMFC. Five worked examples with every intermediate value. Appendix A: changes from 100-B."
+   },
+   {
+    "path": "docs/tickets/RATE-4821.md",
+    "description": "Finance ticket: after 2026-01-05 carrier invoices do not match quotes on 23 of 60 shipments in week 2026-W05; totals must match to the cent; lists the four required new audit columns and the requirement that one bad shipment must not abort the batch."
+   },
+   {
+    "path": "docs/tickets/RATE-4830.md",
+    "description": "CSR observation: shipment picked up Sunday 2026-02-01 quoted with the fuel pct that only became effective Monday 2026-02-02; carrier invoice used the prior week."
+   },
+   {
+    "path": "data/rate_base_2026.csv",
+    "description": "64 lanes (zones 1-8 x 1-8) x 18 NMFC classes = 1152 rows with MIN and six per-cwt break rates, generated with a fixed seed so rates decrease with break and increase with class."
+   },
+   {
+    "path": "data/zones.csv",
+    "description": "About 220 zip3 -> zone rows."
+   },
+   {
+    "path": "data/nmfc_items.json",
+    "description": "About 28 commodities with item number, description, default class, density_based flag (roughly 12 density-based)."
+   },
+   {
+    "path": "data/fuel_index.csv",
+    "description": "42 weekly rows (Mondays 2025-10-06 through 2026-07-20) of DOE national average diesel price; deliberately includes a price change between 2026-01-26 and 2026-02-02."
+   },
+   {
+    "path": "data/fuel_surcharge_table.csv",
+    "description": "Price bands (price_low inclusive, price_high exclusive, last row open-ended) -> surcharge pct, e.g. 3.500-3.549 -> 28.5."
+   },
+   {
+    "path": "data/accessorials.csv",
+    "description": "LIFTGATE PER_CWT 8.50 min 95 max 350; INSIDE PER_CWT 9.00 min 105 max 500; RESIDENTIAL FLAT 125; LIMITED_ACCESS FLAT 110; NOTIFY FLAT 25; HAZMAT FLAT 45; APPT FLAT 35; SORT_SEG PER_CWT 3.25 min 60 max 400; REWEIGH PCT_LINEHAUL 5 min 20 max 120; OVERLENGTH tiers listed in the tariff only."
+   },
+   {
+    "path": "data/contracts.json and data/pricing.db",
+    "description": "Six customers: discounts 0/55/62/68/70/72 pct, AMCs 95-135, three with FAK provisions (e.g. classes 50-100 rate as 70; 60-125 rate as 85; 50-85 rate as 60). The .db is built in the Dockerfile from the JSON."
+   },
+   {
+    "path": "data/shipments_2026w05.csv",
+    "description": "60 sample shipments (about 110 line rows) from week 2026-W05 covering all six customers, density-based and fixed-class commodities, mixed-class shipments, weights spanning all breaks including deficit sweet spots, two cubic-capacity shipments, accessorial combinations, Sunday/Monday pickups around the fuel change."
+   },
+   {
+    "path": "audit/carrier_invoices_2026w05.csv",
+    "description": "Carrier invoice components (linehaul_net, fuel_amount, accessorial_total, total_charge) for the 60 sample shipments, computed from the 100-C rules; 37 already match the 100-B engine, 23 do not."
+   },
+   {
+    "path": "CHANGELOG.md, README.md",
+    "description": "Project history noting 100-B validation in 2024; README documents the CLI and the output column contract (pre-fix 7 columns)."
+   }
+  ],
+  "pip_deps": [
+   "pytest"
+  ]
+ },
+ "instruction_outline": "You maintain the northline LTL rating engine at /app. Northline Regional Carriers replaced Rules Tariff 100-B with 100-C effective 2026-01-05 (docs/tariff/NRC-100-C_rules_tariff.md); our engine still implements 100-B and finance ticket RATE-4821 reports 23 of 60 shipments in week 2026-W05 no longer match carrier invoices (audit/carrier_invoices_2026w05.csv; run python audit/reconcile.py to see the mismatch list). Ticket RATE-4830 gives an additional fuel-surcharge observation. Bring the engine into full compliance with 100-C so that python -m northline.rate_batch --shipments <csv> --out <csv> [--data-dir data] rates any shipments file in the documented input format and (1) reproduces carrier invoices to the cent for the sample week and for other shipments rated under the same tariff and data files, (2) writes the output columns shipment_id, status, reject_reason, rating_class, rated_weight, weight_break, linehaul_gross, discount_amount, linehaul_net, amc_applied, fuel_pct, fuel_amount, accessorial_total, total_charge with monetary values as two-decimal strings, (3) marks unratable shipments as status REJECTED with the tariff Item 995 reason code and blank monetary columns while continuing to rate the remaining shipments and exiting 0, (4) applies every item of the tariff including the order of application in Item 100, deficit weight rating, the highest-class and FAK rules, the cubic capacity rule, the weekly fuel surcharge effective-date semantics, accessorial bases with floors/ceilings and automatic over-length, and half-up cent rounding. The five worked examples in the tariff must be reproduced exactly. Keep the existing CLI flags and the data file formats unchanged; you may restructure internal modules freely. Do not modify files under data/ or audit/. The instruction does not mention the hidden test set, the property checks, or the specific edge cases probed.",
+ "required_changes": [
+  "Item 110 density classification: round each dimension up to the whole inch, cube per line = qty*L*W*H/1728 (4 dp), per-line density = line weight / line cube rounded half-up to 2 dp, lower-inclusive upper-exclusive band table, applied only to density_based NMFC items; density-based line without complete dims -> REJECTED DIMS_REQUIRED",
+  "Item 640 highest-class rule: a multi-line shipment is rated as a single shipment at the highest line class on total weight (pre-fix rates each line separately and sums)",
+  "Item 750 FAK: map the shipment class to rate_as only when within the contract's [min_class, max_class]; load FAK rows from the sqlite pricing db",
+  "Item 780 cubic capacity: when all handling units have dims, total cube >= 750 ft3 and overall density < 6, rate on deemed weight ceil(cube*6) at max(class 125, post-FAK class); accessorial PER_CWT charges still use actual weight",
+  "Item 170 deficit weight rating: gross linehaul = min over actual-weight charge and every higher break's floor weight times that break's rate, floored at the lane MIN; report rated_weight and weight_break for the winning candidate, ties to actual weight; missing lane/class row -> NO_RATE_BASE",
+  "Item 600 ordering: discount applies to linehaul only (not accessorials); AMC floor is applied to net linehaul before fuel and accessorials, with amc_applied Y/N",
+  "Item 300 fuel: use the fuel index row with the latest effective_monday on or before the pickup date (Sunday pickups use the prior week, Monday pickups use that day), band lookup lower-inclusive upper-exclusive with open-ended top band and 0% below the lowest band; no qualifying index row -> REJECTED NO_FUEL_INDEX; fuel = net linehaul * pct",
+  "Item 500 accessorials: FLAT / PER_CWT on actual weight / PCT_LINEHAUL of net linehaul after AMC, each clamped to [min,max]; automatic OVERLENGTH tiers by longest handling-unit dimension; unknown code -> REJECTED UNKNOWN_ACCESSORIAL; never discounted",
+  "Item 990 monetary rounding half-up to the cent at each listed step (replace float/round() with Decimal ROUND_HALF_UP)",
+  "Batch robustness and output contract: unknown zip3 -> UNKNOWN_ZONE, unknown customer -> UNKNOWN_CONTRACT, unknown NMFC -> UNKNOWN_NMFC; rejected rows carry the reason code and blank monetary fields; other shipments in the same file are still rated; CLI exits 0; output has the 14 documented columns in order",
+  "Result model and CSV writer extended with rated_weight, weight_break, amc_applied, fuel_pct, reject_reason; shipment parser accepts optional dims and hazmat flag without failing"
+ ],
+ "solution_plan": [
+  {
+   "file": "northline/classification.py",
+   "change": "Implement dimension round-up, 4-dp cube, per-line density with half-up 2-dp rounding, corrected band table bounds, density-only-for-flagged-items, highest-class rule, cubic-capacity evaluation returning deemed weight and class, DIMS_REQUIRED signalling",
+   "approx_loc_changed": 70
+  },
+  {
+   "file": "northline/weight_breaks.py",
+   "change": "Replace straight break rating with deficit rating across all higher breaks, lane MIN floor, tie-break to actual weight, return (gross, rated_weight, weight_break); NO_RATE_BASE error",
+   "approx_loc_changed": 55
+  },
+  {
+   "file": "northline/fuel.py",
+   "change": "Latest-Monday-on-or-before lookup, half-open band semantics with open top band and 0% floor, NO_FUEL_INDEX error type, Decimal pct",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "northline/accessorials.py",
+   "change": "Basis-aware computation (FLAT/PER_CWT/PCT_LINEHAUL), min/max clamping, automatic OVERLENGTH tiers from HU dims, UNKNOWN_ACCESSORIAL error, per-code Decimal rounding",
+   "approx_loc_changed": 55
+  },
+  {
+   "file": "northline/engine.py",
+   "change": "Rewrite orchestration to Item 100 order: validations -> line classes -> highest class -> FAK -> cubic capacity -> deficit linehaul -> discount -> AMC -> fuel -> accessorials -> total; map domain errors to RatingResult(status=REJECTED, reject_reason=code); Decimal throughout",
+   "approx_loc_changed": 95
+  },
+  {
+   "file": "northline/money.py",
+   "change": "Add Decimal half-up cent rounding, pct application, ceil-to-pound helpers and remove float round2",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "northline/models.py",
+   "change": "Add rated_weight, weight_break, amc_applied, fuel_pct, reject_reason to RatingResult; FakProvision dataclass on Contract; typed exception hierarchy RatingError(code)",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "northline/pricing_db.py",
+   "change": "Join fak table, return FakProvision or None, raise UNKNOWN_CONTRACT for unknown customer",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "northline/rate_batch.py",
+   "change": "Emit the 14-column output contract, write rejected rows with blank money fields, catch RatingError per shipment and continue, exit 0",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "northline/shipment_io.py",
+   "change": "Optional dims (None when blank), hazmat flag, pipe-separated accessorial codes normalization, keep grouping by shipment_id",
+   "approx_loc_changed": 15
+  }
+ ],
+ "estimated_total_loc_changed": 430,
+ "test_strategy": {
+  "approach": "tests/test.sh installs nothing new (pytest is in the image), runs pytest on /tests/*.py against /app, and writes 1 to /logs/verifier/reward.txt only if every test passes. All tests exercise the engine as a black box through the CLI (subprocess python -m northline.rate_batch on temp shipment CSVs written by the test, optionally with --data-dir pointed at a test-provided data directory) and parse the output CSV; no imports of internal modules are required beyond the documented CLI. Test files: test_worked_examples.py reproduces the five tariff worked examples (all components within 0.01); test_reconciliation.py rates data/shipments_2026w05.csv and matches every row to audit/carrier_invoices_2026w05.csv within 0.02 on total and 0.01 on components; test_hidden_batch.py rates an 80-shipment hidden file (fixed-seed generation, expected values produced by the reference implementation and cross-checked by an independent straight-line oracle script written from the tariff text before goldens were frozen) with the same tolerances, deliberately including density boundary values (exactly 6.00, 5.995, 22.50), deficit break sweet spots, cubic-capacity shipments with class above and below 125, FAK in/out-of-range, accessorial min/max clamps, each OVERLENGTH tier, PCT_LINEHAUL with AMC applied; test_properties.py checks tariff-derived invariants on synthetic shipments; test_rejections.py feeds one shipment per rejection code mixed with valid shipments and checks status, reason code, blank money fields, exit code 0 and that the valid rows are still rated correctly; test_fuel_boundary.py rates identical shipments picked up Sunday 2026-02-01, Monday 2026-02-02 and Tuesday 2026-02-03 and asserts Sunday uses the prior week pct while Monday and Tuesday use the new one, plus a pickup before the first index row is rejected NO_FUEL_INDEX.",
+  "invariants_checked": [
+   "Decomposition: total_charge == linehaul_net + fuel_amount + accessorial_total (within 0.02) for every rated row",
+   "Fuel identity: fuel_amount == half-up(linehaul_net * fuel_pct/100) within 0.01, and fuel_pct equals the band pct for the applicable Monday index",
+   "Deficit monotonicity: for one lane and class, linehaul_gross is non-decreasing as weight sweeps 100..12000 lb in 50 lb steps, never exceeds actual-weight straight rating, and equals the higher-break floor charge exactly at deficit points; never below lane MIN",
+   "Discount isolation: the same shipment rated under the 0% and 72% contracts yields identical accessorial_total and the 72% row has linehaul_net == max(gross*(1-0.72), AMC)",
+   "AMC floor: linehaul_net >= contract AMC for all rated rows, amc_applied is Y exactly when gross after discount < AMC",
+   "Highest-class rule: a two-line shipment rates identically to a single-line shipment of the same total weight at the higher class",
+   "Cubic capacity: for a 800 ft3 / 3000 lb shipment rated_weight == ceil(800*6) == 4800, rating_class == 125 (or the higher post-FAK class), and LIFTGATE PER_CWT is computed on 3000 lb",
+   "Density boundary handling: a line with density exactly 6.00 classes as 125, 5.995 rounds to 6.00 -> 125, 5.99 -> 175; dims 47.2x39.6x51.1 are treated as 48x40x52",
+   "Rejections: each Item 995 code appears with status REJECTED and blank monetary fields, other rows in the batch are rated, exit code 0, column header exactly the 14 documented names in order",
+   "Output format: monetary fields are two-decimal strings, amc_applied is Y/N, weight_break is one of L5C/M5C/M1M/M2M/M5M/M10M"
+  ],
+  "anti_overfit_measures": [
+   "Black-box testing through the CLI only: internal module names, function signatures and class layout are never referenced",
+   "Tolerances of 0.01 per component and 0.02 on totals so alternative but correct rounding pipelines (Decimal vs correctly-rounded float) pass",
+   "Property tests derive expectations from the tariff rules and the raw data files (rate base, fuel table, accessorial table) at test time rather than from the reference implementation's numbers",
+   "Hidden golden values are cross-validated by an independent oracle script written from the spec text before freezing; any disagreement is resolved by re-reading the tariff, not by trusting the reference",
+   "Hidden shipment set is disjoint from the visible sample and probes edge cases the sample only partially covers, so hard-coding the 60 sample results cannot pass",
+   "Rejection tests check only the documented status/reason contract and exit code, not exception types or log text",
+   "The test-provided --data-dir variant (a copy of data/ with a modified fuel index and one contract) ensures the solution reads data files at run time rather than embedding constants"
+  ],
+  "pre_apply_failure_reason": "The shipped engine implements 100-B: no deficit weight rating, straight per-line rating instead of highest class, density ignored, discount applied to accessorials, AMC compared after fuel, nearest-date fuel lookup with inclusive bands, accessorials treated as flat with no min/max or over-length, missing output columns, and any KeyError aborts the batch. test_reconciliation fails on 23 shipments, test_worked_examples fails on all five, the output header lacks required columns, and test_rejections fails because the CLI exits non-zero on the first bad shipment."
+ },
+ "difficulty_rationale": "All-or-nothing reward over roughly a dozen interacting tariff rules means a single semantic slip fails the task, and the slips are exactly the ones mid-tier models make when reading a long rules document: applying deficit rating only to the next break instead of all higher breaks and forgetting the lane MIN floor; computing density from unrounded dimensions or over the whole shipment instead of per line, or using inclusive upper bounds; computing PER_CWT accessorials on the deemed or rated weight instead of actual weight; applying discount to accessorials or checking AMC after fuel (the 100-B habits already in the code, which the model tends to preserve); off-by-one fuel week semantics for Sunday pickups; comparing cubic-capacity class 125 without the greater-of rule; letting one rejected shipment abort the batch; and float rounding drift. The change is genuinely cross-cutting (nine modules, roughly 430 lines) because the orchestration order, the result model, the CSV writer and each rule module all move together. A frontier model can finish in one session because the tariff is self-contained with five fully worked examples, Appendix A enumerates every difference from 100-B, and audit/reconcile.py against the 60 carrier invoices gives an immediate feedback loop that exposes most misreadings; the hidden set adds boundary cases that a careful reading of the tariff (not extra knowledge) resolves. Expected: mid-tier avg@8 in the 25-40% range (the reconciliation loop lets it converge sometimes), frontier well above.",
+ "determinism_notes": "No wall-clock dependence: all dates come from shipment rows; the fuel index and tariff have fixed effective dates. All data files (rate base, zones, shipments, hidden shipments, carrier invoices) are generated once by seeded scripts and committed as static files; the Dockerfile rebuilds pricing.db from contracts.json with deterministic insertion order. Money uses Decimal with ROUND_HALF_UP per the spec, and tests tolerate 0.01/0.02 so a correct float implementation also passes deterministically. Tests spawn the CLI with a fixed environment and write outputs to a per-test temp directory; no network, no threads, no randomness at test time; pytest runs with -p no:randomly and fixed ordering. Runtime is a few seconds.",
+ "risks": [
+  "Spec ambiguity: the tariff must state the order of application, tie-breaking, and rounding points explicitly, otherwise equally valid readings could fail the goldens; mitigated by Item 100, Item 990 and the worked examples covering each ambiguity, plus the independent oracle cross-check",
+  "Difficulty overshoot: too many rules could drive mid-tier avg@8 to 0%; mitigated by keeping the rule set to the eleven listed items, providing the reconciliation feedback loop, and the change appendix; if pilot runs show 0/8, drop the cubic-capacity greater-of nuance or widen tolerances",
+  "Visible carrier invoice file could be mistaken for answer leakage; it is a legitimate development oracle for the sample week only and the hidden set is disjoint with distinct edge cases",
+  "Generated rate base must be shaped so deficit rating actually triggers on a meaningful share of shipments (break rates must fall fast enough); verify during data generation that at least 15% of hidden shipments are deficit-rated and at least 2 use the lane MIN",
+  "The output column contract is an interface requirement stated in the instruction; tests must check names and order only as documented and nothing about extra debugging files",
+  "solve.sh must be a pure file rewrite (heredocs or patch) with no network and must finish in seconds; the Dockerfile must not copy tests/ or solution/ (use explicit COPY of app files and a .dockerignore)"
+ ]
+}

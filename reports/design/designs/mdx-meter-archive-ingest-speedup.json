@@ -1,0 +1,222 @@
+{
+ "name": "mdx-meter-archive-ingest-speedup",
+ "category": "Performance / algorithm optimization: improve latency and throughput of a nightly interval-meter-data ingest while implementing the vendor archive format spec and the market VEE/settlement rules faithfully (measured by tests with large headroom)",
+ "title": "Bring the Halden MDX-2 nightly meter-archive ingest back inside its window and into spec",
+ "summary": "The codebase is a small utility meter-data-management (MDM) ingest service, Python package `gridmeter`, that decodes a head-end vendor's binary archive format (Halden Metering Systems MDX-2 rev 2.3: CRC-16 framed blocks carrying META channel tables, fixed-width INTERVAL records, PACKED delta-compressed interval runs, and EVENT records), applies the market's Validation-Estimation-Editing rules (duplicate resolution by block sequence, gap interpolation up to 8 intervals, missing-interval marking, device status flags), aggregates kWh to hourly per-feeder settlement totals in local standard time, and writes an output sqlite database, a CSV and a JSON run report through a CLI. After the vendor's firmware 4.2 rollout the 7-day backfill archive takes over 40 minutes and blows the 4-hour nightly window (ticket OPS-2291), the log shows thousands of \"unknown block type 0x12 skipped\" warnings (packed blocks are silently dropped, so totals are short), REBASE records are decoded as gigantic readings, retransmitted blocks are resolved first-wins instead of the spec's highest-sequence-wins, a length-corrupted block swallows everything after it, and settlement produced a 23-hour day on 2026-03-08 because hours are bucketed in DST wall-clock time instead of standard time. The engine's hot paths are textbook production anti-patterns: O(n^2) buffer re-slicing in framing, a bit-by-bit pure-Python CRC, one sqlite SELECT per record for channel metadata, an O(n^2) sorted-insert gap filler, and a SELECT-then-INSERT-then-COMMIT per reading in the store. The agent must make the 7-day archive ingest in under 3 minutes on the 2-vCPU runner (reference: roughly 20-30 s) while making the output conform exactly to the two spec documents in docs/ (packed blocks, rebase records, CRC resynchronisation, duplicate policy, gap rules, standard-time hours) and keeping the documented output schema, CLI and run-report contract.",
+ "real_world_grounding": "Utilities run nightly MDM ingests of head-end archives, and firmware or file-format changes from the meter vendor routinely both slow the pipeline and silently drop data; settlement teams then find hours missing on DST days and totals short of the register reads. Every element here mirrors real practice: CRC-16/CCITT-FALSE framed binary blocks with a magic and length field and a resync rule, per-meter channel tables with scale exponents and CT/PT multipliers held in the MDM, delta/zigzag-varint compressed interval runs introduced to shrink files, rebase records at day boundaries, retransmission of blocks with sequence numbers, VEE rules (gap interpolation limits, missing flags, device-estimated flags, last-received-wins duplicate resolution) modelled on ISO/RTO market rules, and settlement in local standard time year-round. Evidence trail in the workspace: docs/tickets/OPS-2291.md (ops ticket: nightly ingest of data/archives/wk11_2026.mdx exceeded the 4-hour window, log excerpt with phase timers, settlement complaint that 2026-03-08 has 23 hours and that weekly feeder totals are ~35% below register reads on firmware-4.2 meters, acceptance target under 3 minutes on the 2-vCPU runner); logs/nightly_2026-03-14.log (full run log: per-phase timings from the pipeline's own timers showing store and VEE phases dominating, 5,812 \"unknown block type 0x12 skipped\" warnings, \"settlement day 2026-03-08 has 23 hours\" warning, a CRC failure followed by \"no further blocks found\"); docs/spec/MDX2_archive_format_rev2.3.md (the vendor's format spec: block header layout, CRC definition with the check value for \"123456789\" = 0x29B1, META/INTERVAL/PACKED/EVENT/END blocks, rebase flag semantics, zigzag LEB128 delta encoding with a fully worked hex example, resynchronisation rule, a section \"Changes in rev 2.3 / firmware 4.2\" listing packed blocks, rebase records and retransmission); docs/spec/VEE_and_settlement_rules_v1.4.md (market rules 7.3.1-7.3.5 with worked examples: duplicate resolution by block sequence with tie-break on file order, gap estimation up to 8 intervals by linear interpolation flagged E, longer gaps recorded as M rows with null value, leading/trailing gaps not estimated, device flags D/P, hourly feeder totals in standard time with n_intervals/n_missing/complete semantics); docs/vendor/HMS_firmware_4.2_release_notes.md; docs/schema/output_schema.sql and docs/schema/run_report.md (the fixed output contract); data/samples/day_sample.mdx plus data/samples/day_sample_expected_hourly.csv (a 12-meter one-day sample archive and the hourly totals produced by the vendor's reference decoder, which exercises packed and rebase blocks); scripts/bench_ingest.py (prints phase timings); CHANGELOG.md noting the decoder was written against rev 2.1 files.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "gridmeter/__init__.py",
+    "purpose": "Package marker and version string.",
+    "approx_loc": 6
+   },
+   {
+    "path": "gridmeter/__main__.py",
+    "purpose": "Entry point so the tool runs as `python -m gridmeter ingest ...`; delegates to cli.main.",
+    "approx_loc": 8
+   },
+   {
+    "path": "gridmeter/cli.py",
+    "purpose": "argparse CLI: `ingest --archive PATH --ref-db PATH --out-db PATH --csv PATH --report PATH [--log-level]`; wires the pipeline; exit code 0 on completion, 2 on usage/IO errors. Contract is fixed by the instruction.",
+    "approx_loc": 90
+   },
+   {
+    "path": "gridmeter/crc16.py",
+    "purpose": "CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflection, no xorout) implemented as a per-byte 8-iteration pure-Python bit loop; exposes crc16(data: bytes) -> int and a self-check against the spec's 0x29B1 vector.",
+    "approx_loc": 30
+   },
+   {
+    "path": "gridmeter/framing.py",
+    "purpose": "Block reader for MDX-2 archives: reads the whole file, locates the 'MDX2' magic, parses the 12-byte header (magic, type u8, flags u8, length u16, seq u16, crc u16), verifies the CRC over type..payload, yields Block(type, flags, seq, payload, file_offset). Pre-fix: after every block does `buf = buf[end:]` (O(n^2) copying), re-finds the magic with a Python loop over slices, and on CRC failure skips the full declared length instead of resynchronising at the next magic after header_start+1 as spec section 3.4 requires; a corrupted length field therefore loses the rest of the file.",
+    "approx_loc": 120
+   },
+   {
+    "path": "gridmeter/records.py",
+    "purpose": "Decoders per block type using the current META channel table: META (meter_id 16-byte ASCII, base_ts u32, n_channels u8, per channel channel_no u8 / interval_secs u16 / scale_exp i8), INTERVAL (8-byte records: channel_idx u8, status u8, offset u16 in intervals from the channel's base, raw i32), EVENT (ts u32, code u16, arg u16), END. Pre-fix: decodes fields with int.from_bytes on individual slices; treats status bit 0x80 (REBASE) as an ordinary reading instead of setting a new per-channel base timestamp; logs a warning and skips block type 0x12 (PACKED) entirely.",
+    "approx_loc": 190
+   },
+   {
+    "path": "gridmeter/timebase.py",
+    "purpose": "Per-(meter, channel) time base state: base_ts from META or a REBASE record, interval_end_utc = base_ts + offset*interval_secs; helper for engineering value = raw * 10**scale_exp * mdm_multiplier rounded half-up to 3 decimals.",
+    "approx_loc": 60
+   },
+   {
+    "path": "gridmeter/reference.py",
+    "purpose": "Access to the MDM reference sqlite DB (meters, channels, feeders). Pre-fix: lookup_channel(meter_id, channel_no) and lookup_feeder(meter_id) each run a SELECT per call and are called once per decoded record.",
+    "approx_loc": 80
+   },
+   {
+    "path": "gridmeter/vee.py",
+    "purpose": "Validation/Estimation per rules 7.3.1-7.3.4: duplicate resolution, gap detection per channel, linear interpolation for gaps of at most 8 intervals (flag E), M rows with null kWh for longer gaps, device status bits mapped to D and P flags. Pre-fix: keeps per-channel readings in a list, inserts estimated readings with list.index/sorted() on every insertion (O(n^2)), and does no duplicate resolution (left to the store).",
+    "approx_loc": 170
+   },
+   {
+    "path": "gridmeter/settlement.py",
+    "purpose": "Hourly per-feeder aggregation of kWh_del channels: hour_start label, kwh sum, n_intervals, n_missing, complete flag. Pre-fix: buckets by zoneinfo local wall-clock time of the feeder's tz (DST-aware), so spring-forward days have 23 hours and fall-back days merge two hours; ignores feeders.std_offset_min.",
+    "approx_loc": 90
+   },
+   {
+    "path": "gridmeter/store.py",
+    "purpose": "Creates the output sqlite schema from docs/schema/output_schema.sql and writes interval_readings, hourly_feeder_totals, ingest_runs. Pre-fix: for each reading runs SELECT ... WHERE meter_id=? AND channel_no=? AND interval_end_utc=? (first-wins dedupe), then INSERT, then conn.commit(), with indexes created before the bulk load.",
+    "approx_loc": 130
+   },
+   {
+    "path": "gridmeter/report.py",
+    "purpose": "Writes the hourly CSV (feeder_id, hour_start_std, kwh, n_intervals, n_missing, complete) and the JSON run report (blocks_total, blocks_crc_failed, blocks_unknown_type_skipped, records_decoded, readings_stored, readings_estimated, readings_missing, duplicates_superseded, phase_seconds).",
+    "approx_loc": 80
+   },
+   {
+    "path": "gridmeter/pipeline.py",
+    "purpose": "Orchestrates phases (frame -> decode -> reference -> vee -> settlement -> store -> report) with phase timers and logging; currently materialises full lists between phases and calls reference lookups per record.",
+    "approx_loc": 110
+   },
+   {
+    "path": "scripts/build_reference_db.py",
+    "purpose": "Builds data/mdm_reference.db deterministically from data/reference/meters.csv, channels.csv, feeders.csv (run at image build).",
+    "approx_loc": 60
+   },
+   {
+    "path": "scripts/bench_ingest.py",
+    "purpose": "Runs the pipeline on a given archive and prints per-phase timings and report counters; referenced by the ticket.",
+    "approx_loc": 50
+   },
+   {
+    "path": "unit_tests/test_crc16.py, unit_tests/test_framing_small.py, unit_tests/test_vee_rules.py",
+    "purpose": "The team's existing small unit tests (visible to the agent) covering the CRC vector, framing of a two-block hand-built archive, and 3-interval gap interpolation; they pass pre-fix and continue to pass post-fix.",
+    "approx_loc": 90
+   }
+  ],
+  "data_files": [
+   {
+    "path": "docs/spec/MDX2_archive_format_rev2.3.md",
+    "description": "Vendor format specification: header layout, CRC-16/CCITT-FALSE definition and check value, block types 0x01 META / 0x10 INTERVAL / 0x11 EVENT / 0x12 PACKED / 0xFF END, REBASE flag (status 0x80) semantics, zigzag LEB128 delta encoding with worked hex example, resynchronisation rule after CRC failure, retransmission and sequence numbering, rev 2.3 change list."
+   },
+   {
+    "path": "docs/spec/VEE_and_settlement_rules_v1.4.md",
+    "description": "Market rules 7.3.1-7.3.5 with worked examples: duplicate resolution (higher block seq wins, tie -> later in file), gap estimation limit of 8 intervals, M rows, leading/trailing gaps, device flags, flag string ordering DEMP, hourly settlement in standard time using feeders.std_offset_min, complete/n_missing semantics, rounding."
+   },
+   {
+    "path": "docs/schema/output_schema.sql and docs/schema/run_report.md",
+    "description": "Fixed output contract: DDL for interval_readings(meter_id, channel_no, interval_end_utc, kwh, flags, source_seq), hourly_feeder_totals(feeder_id, hour_start_std, kwh, n_intervals, n_missing, complete), ingest_runs; required indexes; JSON report keys and their definitions."
+   },
+   {
+    "path": "docs/tickets/OPS-2291.md, docs/vendor/HMS_firmware_4.2_release_notes.md, CHANGELOG.md",
+    "description": "The ops ticket with acceptance target and settlement complaints, the vendor release notes announcing packed blocks, rebase records and retransmission, and the changelog noting the decoder targets rev 2.1."
+   },
+   {
+    "path": "logs/nightly_2026-03-14.log",
+    "description": "Full run log of the failed nightly: phase timings (framing 41 s, decode 130 s, reference 410 s, vee 1,150 s, store killed at 4 h), 5,812 unknown-block-type warnings, 23-hour-day warning, CRC failure followed by no further blocks."
+   },
+   {
+    "path": "data/reference/meters.csv, channels.csv, feeders.csv -> data/mdm_reference.db",
+    "description": "1,000 meters on 40 feeders (tz America/Chicago and America/New_York, std_offset_min -360/-300), 1-2 channels each (kWh_del at 900 s, some kWh_rec and 1800 s channels) with CT/PT multipliers; DB built at image build."
+   },
+   {
+    "path": "data/archives/wk11_2026.mdx (about 20-25 MB) and data/archives/wk11_2026_day1.mdx",
+    "description": "Generated deterministically at image build by a seeded generator kept in environment/tools/ (not copied into /app): 7 days 2026-03-08..2026-03-14 for 1,000 meters, ~2.4M interval readings, ~35% in PACKED blocks, rebase records at day boundaries, ~4% retransmitted blocks with corrections (some retransmits carry lower seq), gaps of 1-12 intervals, a few CRC-corrupted blocks including one with a corrupted length field, spanning the US spring-forward day."
+   },
+   {
+    "path": "data/samples/day_sample.mdx and data/samples/day_sample_expected_hourly.csv",
+    "description": "Vendor-supplied one-day, 12-meter sample archive containing packed and rebase blocks plus a retransmission, and the hourly totals from the vendor's reference decoder (gives the agent a correctness feedback loop)."
+   }
+  ],
+  "pip_deps": [
+   "pytest==8.4.1",
+   "tzdata==2025.2"
+  ]
+ },
+ "instruction_outline": "Written as ticket OPS-2291 handed to the MDM team engineer. Context: nightly ingest `python -m gridmeter ingest --archive data/archives/wk11_2026.mdx --ref-db data/mdm_reference.db --out-db out/wk11.db --csv out/wk11_hourly.csv --report out/wk11_report.json` was killed after 4 hours; logs/nightly_2026-03-14.log and scripts/bench_ingest.py show where time goes. Settlement also reports totals ~35% short on firmware-4.2 meters and a 23-hour day on 2026-03-08. The vendor moved to MDX-2 rev 2.3 (docs/spec/MDX2_archive_format_rev2.3.md, release notes in docs/vendor/); the market rules are docs/spec/VEE_and_settlement_rules_v1.4.md. Required outcome: (1) the 7-day archive must ingest end-to-end in under 3 minutes on the 2-vCPU job runner (the fix is expected to be algorithmic, not a bigger machine); (2) output must conform to both spec documents in full: all block types decoded including PACKED and REBASE, CRC resynchronisation per the spec so a corrupted block never loses subsequent blocks, duplicate readings resolved by the spec's sequence rule, gap estimation and missing marking per rule 7.3.2, device flags per 7.3.3, hourly feeder totals in standard time per 7.3.5 with every day having 24 hours; (3) the output schema in docs/schema/output_schema.sql, the CSV columns, the run-report keys/definitions in docs/schema/run_report.md and the CLI arguments are contracts and must not change; CRC failures and unknown blocks are counted in the report, not fatal; (4) the vendor sample data/samples/day_sample.mdx must reproduce data/samples/day_sample_expected_hourly.csv (to 0.001 kWh), but matching only the sample is not sufficient. Constraints: do not modify anything under data/ or docs/; pure Python 3.11 with the installed packages only; deterministic output (re-running produces identical tables). Notes that the change is expected to span several modules and that the existing unit tests in unit_tests/ should keep passing. Does not name the defects, hidden fixtures, budgets other than the 3-minute target, or assertions.",
+ "required_changes": [
+  "Framing must be single-pass and linear: locate each block via the header length field, verify CRC-16/CCITT-FALSE, and on CRC failure resynchronise by searching for the next magic starting at header_start+1 (not by skipping the declared length), so an archive with a corrupted length byte still yields every subsequent valid block and reports exactly the corrupted blocks in blocks_crc_failed; a truncated final block is counted as a CRC failure and does not raise.",
+  "CRC computation must not be a per-bit Python loop on the hot path (table-driven or binascii.crc_hqx with init 0xFFFF are both acceptable); the check value for b'123456789' remains 0x29B1.",
+  "Implement PACKED blocks (type 0x12) per spec section 5.3: channel_idx u8, status u8 applying to every reading in the run, first_offset u16 (intervals from the channel base), count u16, base_raw i32, then count-1 zigzag-encoded LEB128 deltas each relative to the previous decoded raw value; blocks_unknown_type_skipped must be 0 for rev 2.3 archives and decoded readings must match the goldens.",
+  "Implement REBASE records in INTERVAL blocks (status bit 0x80): the raw field is a new UTC base timestamp for that channel and the record is not a reading; subsequent offsets for that channel are relative to the new base.",
+  "Channel and feeder metadata must be resolved without a database round-trip per record (preload or cache); engineering kWh = raw * 10**scale_exp * mdm multiplier rounded half-up to 3 decimals.",
+  "Duplicate resolution per rule 7.3.1: for the same (meter_id, channel_no, interval_end_utc) the reading from the block with the higher sequence number prevails; equal sequence numbers resolve to the later block in the file; a retransmitted block with a lower sequence number must NOT override the original; duplicates_superseded counts the losers; stored source_seq is the winner's block seq.",
+  "Gap handling per rule 7.3.2 in linear time: gaps of 1..8 missing intervals between two valid readings on a channel are filled by linear interpolation (flag E, 3-decimal half-up rounding of each interpolated value); gaps of 9+ intervals produce one row per missing interval with NULL kwh and flag M; gaps before the first or after the last reading of a channel produce nothing; device status bits map to flags D (0x04) and P (0x01) and flag strings use the fixed DEMP ordering.",
+  "Settlement per rule 7.3.5: hourly totals per feeder over kWh_del channels only, bucketed by interval_end_utc in the feeder's standard time (feeders.std_offset_min, no DST), labelled hour_start_std as 'YYYY-MM-DDTHH:00'; every calendar day in the archive has 24 rows per feeder; n_intervals counts non-M readings, n_missing counts M rows, complete = 1 iff n_missing == 0 and every expected interval of every kWh_del channel on the feeder is present.",
+  "Store must bulk-load inside a transaction (executemany / INSERT batches; indexes may be created after load) while preserving the documented DDL, column names and indexes exactly; re-running into a fresh output path yields identical rows.",
+  "The run report must carry correct counts for blocks_total, blocks_crc_failed, blocks_unknown_type_skipped, records_decoded, readings_stored, readings_estimated, readings_missing and duplicates_superseded as defined in docs/schema/run_report.md; the whole 7-day ingest completes with exit code 0 well inside the budget (reference ~20-30 s; naive code exceeds 40 minutes)."
+ ],
+ "solution_plan": [
+  {
+   "file": "gridmeter/framing.py",
+   "change": "Rewrite the reader as a single-pass generator over a memoryview/bytes buffer with an integer cursor: parse header with a precompiled struct.Struct('>4sBBHHH'), jump by 12+length, verify CRC, on failure or short read resync with bytes.find(MAGIC, header_start+1); count truncated tail as a CRC failure; drop the per-block buffer re-slicing.",
+   "approx_loc_changed": 70
+  },
+  {
+   "file": "gridmeter/crc16.py",
+   "change": "Replace the bit loop with a 256-entry table-driven implementation (or binascii.crc_hqx(data, 0xFFFF)); keep the 0x29B1 self-check.",
+   "approx_loc_changed": 18
+  },
+  {
+   "file": "gridmeter/records.py",
+   "change": "Decode INTERVAL records with struct.iter_unpack('>BBHi'); handle status 0x80 as a REBASE updating the channel's base_ts; add decode_packed(): parse the 10-byte run header, then zigzag LEB128 deltas accumulating raw values and emitting readings with the shared status and consecutive offsets; register 0x12 in the dispatch table so it is no longer counted as unknown.",
+   "approx_loc_changed": 95
+  },
+  {
+   "file": "gridmeter/reference.py",
+   "change": "Add load_all() returning dicts keyed by (meter_id, channel_no) and meter_id -> (feeder_id, std_offset_min); remove per-record SELECTs from the hot path.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "gridmeter/vee.py",
+   "change": "Resolve duplicates with a dict keyed by (meter, channel, interval_end) storing (seq, file_order, reading) and replacing only when the new key compares higher; sort each channel once, walk pairs to detect gaps, generate E interpolations or M rows in one pass; map device bits to D/P; count estimated/missing/superseded.",
+   "approx_loc_changed": 75
+  },
+  {
+   "file": "gridmeter/settlement.py",
+   "change": "Bucket by ((interval_end_utc - 1) + std_offset_min*60) // 3600 using the feeder's standard offset instead of zoneinfo wall time; compute expected interval counts per hour from the feeder's kWh_del channel interval lengths to set complete; emit 24 rows per day per feeder including zero-reading hours within the archive span.",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "gridmeter/store.py",
+   "change": "Open one transaction, executemany the readings and hourly rows in chunks, create indexes after load, drop the SELECT-before-INSERT dedupe and per-row commit; keep DDL sourced from docs/schema/output_schema.sql.",
+   "approx_loc_changed": 55
+  },
+  {
+   "file": "gridmeter/pipeline.py",
+   "change": "Preload reference dicts once, stream blocks -> decoded readings into the VEE resolver without per-record lookups, pass counters through to the report; keep phase timers.",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "gridmeter/report.py",
+   "change": "Populate duplicates_superseded and readings_missing from the VEE counters; unchanged CSV/JSON layout.",
+   "approx_loc_changed": 10
+  }
+ ],
+ "estimated_total_loc_changed": 330,
+ "test_strategy": {
+  "approach": "tests/test.sh runs pytest on /tests against /app and writes 1 to /logs/verifier/reward.txt only if all tests pass. Every test drives the tool as a black box via subprocess `python -m gridmeter ingest ...` into a per-test temp directory and inspects the output sqlite DB, CSV and JSON report; nothing imports gridmeter internals. Fixtures: /tests/fixtures holds eight small hand-shaped archives (50-400 KB) produced by the implementer's generator with edge-case seeds and byte-level mutations, plus goldens produced by an independent straight-line oracle decoder written from the spec text (separate from the reference solution) and cross-checked against the generator's ground-truth series; /tests/golden holds the 7-day hourly totals (7 x 24 x 40 rows) and 300 sampled reading rows for the build-generated archive, also from the oracle. Test files: test_vendor_sample.py (day_sample.mdx hourly CSV matches the vendor CSV within 0.001; report says 0 unknown blocks); test_format_edges.py (packed-heavy archive, rebase archive, CRC payload-corrupt and length-corrupt archives, truncated tail: readings and report counters equal goldens); test_vee_rules.py (duplicate archives with higher-seq-later, lower-seq-later and equal-seq retransmits; gaps of 3, 8, 9 and leading/trailing gaps; device flags: rows, kwh within 1e-6, flags exact, duplicates_superseded exact); test_settlement_time.py (spring-forward and fall-back day archives for both zones: exactly 24 rows per feeder per day, labels in standard time, kwh equals test's own SQL recomputation from interval_readings, complete/n_missing semantics); test_performance.py (runs the 7-day ingest with subprocess timeout 180 s and asserts exit 0 within budget, then hourly totals match the golden within 0.002 and sampled readings match; a secondary scaling check asserts time(7-day) <= 20 x time(1-day) + 5 s); test_output_contract.py (PRAGMA table_info matches the DDL columns/types, required indexes exist, CSV header exact, report keys exact, second run into a fresh path is byte-identical for tables and CSV).",
+  "invariants_checked": [
+   "Runtime: 7-day archive ingest exits 0 within 180 s (reference ~20-30 s; unmodified code exceeds 40 minutes and is killed), and 7-day time <= 20 x 1-day time + 5 s (linear scaling; O(n^2) code fails this even on fast hardware)",
+   "Hourly identity: for every hourly_feeder_totals row, kwh equals the test's own SQL recomputation sum(kwh) over interval_readings joined to the reference DB, bucketed by standard-time hour, within 1e-6; n_intervals and n_missing equal the recomputed counts",
+   "Calendar completeness: every feeder has exactly 24 hourly rows for each day covered by the archive, including 2026-03-08, with hour_start_std labels at standard offset",
+   "Channel regularity: per (meter, channel) the stored interval_end_utc values are unique, spaced exactly interval_secs apart between the first and last reading (E and M rows fill interior gaps), and count == (max-min)/interval_secs + 1",
+   "Flag semantics: rows flagged M have NULL kwh and rows without M have non-null kwh; E rows lie strictly between two non-E, non-M neighbours no more than 8 intervals apart; interpolated values equal the linear interpolation of those neighbours within 0.001; flag strings are subsets of DEMP in that order",
+   "Duplicate policy: in the retransmission fixtures the stored kwh/source_seq equal the highest-seq block's values (later-in-file only on seq ties), and duplicates_superseded equals the oracle count",
+   "Format edges: packed and rebase fixtures decode to the oracle's readings exactly; the length-corrupt fixture yields all blocks after the corrupted one with blocks_crc_failed == 1; truncated tail counts one failure and exits 0",
+   "Contract: output DDL columns/types/indexes, CSV header, report keys and CLI arguments are unchanged; two runs produce identical tables and CSV; visible unit tests still pass"
+  ],
+  "anti_overfit_measures": [
+   "Goldens come from an independent oracle written from the spec documents (not from the reference solution) and are triple-checked against the generator's ground-truth series and the reference output before freezing",
+   "Only public surfaces are observed: CLI exit code, sqlite tables defined by the workspace DDL, CSV, JSON report; no internal function names, module layout, or data-structure choices are asserted",
+   "Multiple valid implementations pass by construction: table CRC or binascii.crc_hqx; struct.iter_unpack or memoryview casts; dict preload or lru_cache; in-memory dedupe or INSERT with ON CONFLICT ordered by seq; zoneinfo standard offset or feeders.std_offset_min (both give the same offsets); float or Decimal arithmetic thanks to 1e-6 / 0.001 tolerances",
+   "Timing budget has roughly 6-9x headroom above the reference and the naive code is roughly 15x above the budget (killed by timeout), so hardware variance cannot flip the outcome; the scaling-ratio check is hardware-independent",
+   "Hidden fixtures include boundary values not present in the visible sample or the big archive in isolation (8- vs 9-interval gaps, equal-seq ties, lower-seq retransmit, fall-back day, corrupted length field, truncated tail) so that hard-coding the vendor sample cannot pass",
+   "Instruction states every checked behaviour (3-minute target, full spec conformance, fixed contracts, deterministic re-run) and the spec documents contain worked examples for every edge the tests probe"
+  ],
+  "pre_apply_failure_reason": "Pre-apply: test_performance.py times out at 180 s (per-row SELECT+INSERT+COMMIT on ~2.4M rows and O(n^2) gap filling take over 40 minutes); test_vendor_sample.py fails because PACKED blocks are skipped (totals ~35% low) and REBASE records are stored as huge readings; test_format_edges.py fails on the length-corrupt fixture (all later blocks lost) and on packed/rebase goldens; test_vee_rules.py fails on duplicates (first-wins instead of highest-seq); test_settlement_time.py fails with 23 rows on 2026-03-08 and merged hours on the fall-back fixture. Post-apply all pass in roughly 1-2 minutes total."
+ },
+ "difficulty_rationale": "All-or-nothing reward over a latency budget plus roughly eight interacting spec behaviours. A mid-tier model typically profiles, fixes the obvious per-row commit in store.py and maybe the reference lookups, and stops when the small sample runs fast, leaving the O(n^2) sorted-insert in vee.py (which alone exceeds the budget on 2.4M readings) or the O(n^2) framing; it also tends to misread the spec in the exact places the hidden fixtures probe: implementing zigzag LEB128 with the sign handled wrong or applying the packed status only to the first reading, treating REBASE as a reading, resolving duplicates as last-in-file instead of highest sequence with a file-order tie-break, skipping the declared length after a CRC failure instead of resynchronising at header_start+1, filling 9-interval gaps or refusing 8-interval ones, and bucketing hours with zoneinfo DST wall time (the existing code's habit) instead of the standard offset. Because performance and correctness fixes are entangled (the dedupe policy lives in the slow SELECT-before-INSERT path that must be removed), a symptom patch is easy and a faithful rewrite is required. A frontier model can finish in one session: the spec has worked hex examples for the packed encoding and CRC, the VEE rules have worked examples for every boundary, the vendor sample plus expected CSV exercises packed/rebase/retransmit and gives immediate feedback, bench_ingest.py exposes each hotspot, and the log names the 0x12 and 23-hour symptoms. Expected: mid-tier avg@8 in the 15-35% range, frontier well above 60%.",
+ "determinism_notes": "All archives are generated at image build by a seeded generator (random.Random with fixed seeds, Python 3.11 pinned) kept in environment/tools and not copied to /app; the small hidden fixtures are generated once by the implementer and committed under tests/fixtures as static binaries with their oracle goldens. Every timestamp is a fixed UTC epoch in the data; standard offsets come from the reference DB; tzdata is pinned so the pre-fix zoneinfo path behaves identically everywhere. Money-like values use half-up rounding to 3 decimals and tests apply 1e-6 / 0.001 / 0.002 tolerances so float and Decimal implementations both pass. Tests spawn the CLI with fixed arguments into per-test temp directories, ignore the report's phase_seconds, use subprocess timeouts, have no randomness, and run in fixed pytest order; the only wall-clock-sensitive check is the 180 s budget with 6-9x headroom over the reference and the hardware-independent 20x scaling ratio with +5 s slack. sqlite is stdlib; no network, threads or external services.",
+ "risks": [
+  "Timing headroom must be verified on the 2-CPU validation container: implementer must size the archive so the reference (all fixes) runs in <= 30 s, each of the store, VEE and lookup defects alone exceeds 180 s, and CRC+framing together add well over 60 s; if the runner is slower than expected, raise the budget rather than shrink the data",
+  "Golden correctness: the independent oracle, the generator ground truth and the reference must agree bit-for-bit on flags and within tolerance on kwh before goldens are frozen; a slip in zigzag or rounding in the oracle would make the task unsolvable, so pre/post validation of every fixture is mandatory",
+  "Spec ambiguity: the format and rules documents must pin down every probed edge (tie-break on equal seq, header_start+1 resync, truncated tail counted as CRC failure, 8 vs 9 interval gap limit, hour bucketing by interval_end, complete definition, rounding) with worked examples, otherwise an alternate valid reading could fail",
+  "Scaling-ratio check may be noisy on very fast machines where the 1-day run is ~1 s; keep the +5 s slack or drop the ratio assertion if it flakes in validation, relying on the absolute budget",
+  "Scope for a single implementer session is at the upper end (8 modules, ~330 lines, generator, oracle, fixtures); if time is short drop REBASE records first (removing ~40 changed lines and one fixture), then the fall-back-day fixture, without weakening the remaining tests",
+  "Build-time fixture generation adds ~10-20 s to the Docker build and must be deterministic; avoid set iteration order or hash-dependent ordering in the generator"
+ ]
+}

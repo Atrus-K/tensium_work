@@ -1,0 +1,223 @@
+{
+ "name": "cobol-loan-accrual-port-parity",
+ "category": "Rewriting / cross-language migration",
+ "title": "Bring the Python port of mainframe loan-accrual batch LNACCR01 to byte-parity with the COBOL original",
+ "summary": "The workspace is `pyledger`, an in-progress Python port of LNACCR01, a mainframe COBOL batch job that reads a fixed-width loan master file plus a payment-transaction file, applies payments, accrues interest for the period, assesses late fees from a tiered rate table, assigns a delinquency status letter, and writes a fixed-width output file with a control-total trailer. The port has been running in shadow mode next to the mainframe; the March batch reconciliation shows 37 of 400 output records differ from the mainframe output (interest off by a cent, late fees wrongly waived or charged, wrong days-late, wrong status letter, wrong sign on credit balances, wrong trailer count), and Finance has blocked cutover. The agent must read the reconciliation log, the incident ticket, the dismissed PR review comments, the read-only COBOL source and copybooks, and diagnose about nine distinct semantic-fidelity defects in the port (COBOL ROUNDED vs banker's rounding, truncation of intermediate results to PIC scale, zoned-decimal overpunch signs, the two-digit-year century window, the 30/360 day-count clamps, exclusive day differences and strict grace comparison, a flag carved out of FILLER in a newer copybook, 1-based OCCURS indexing / inclusive tier bounds, EVALUATE first-match ordering, and closed-account exclusion from trailer totals). The fix must land as root-cause changes in the port's semantics so the CLI produces output byte-identical to the mainframe for the March batch and for any other batch, verified by the workspace's own `recon` command.",
+ "real_world_grounding": "Mainframe-to-Python migrations of COBOL batch jobs are among the most common real rewrite projects in banking/insurance, and the failure mode is exactly this: the port 'works' on most records but disagrees with the mainframe on edge cases because COBOL numeric semantics (PIC truncation, ROUNDED, zoned overpunch signs, 1-based OCCURS, two-digit years, EVALUATE ordering) were transliterated naively. Shadow runs with a reconciliation job that diffs output files field-by-field is the standard cutover gate. Evidence trail in /app: `docs/tickets/LND-4127-shadow-parity-blocker.md` (incident ticket from Finance with the mismatch summary and the cutover acceptance criterion: zero recon mismatches on the March batch and on subsequent batches); `logs/recon/recon_LNACCR01_202403.txt` (the reconciliation log: one line per differing field with account key, field name, legacy value, pyledger value, 37 records / 61 field diffs); `docs/pr/PR-218-port-lnaccr01-review.md` (the review thread of the original port, in which a reviewer questioned round(), the FILLER bytes, and the century handling and was told 'verified, matches on our sample'); `legacy/LNACCR01.cbl` (~260 lines of COBOL, the authoritative spec, read-only) with copybooks `legacy/copybooks/LNMAST.cpy` (v3, containing the LM-WAIVE-FLAG carved from FILLER), `LNTRAN.cpy`, `LNOUT.cpy`, `RATETBL.cpy`, and `legacy/JCL/LNACCR01.jcl` for context; `data/` holds the March batch inputs and the mainframe's own output `data/MAINFRAME_LNOUT_202403.dat`, which is the parity target. A CHANGELOG entry notes the copybook was bumped to v3 in 2019 (the port was written against v2).",
+ "codebase": {
+  "modules": [
+   {
+    "path": "pyledger/__main__.py",
+    "purpose": "Entry point: `python -m pyledger run --master --trans --rates --holidays --asof YYYY-MM-DD --out` and `python -m pyledger recon --legacy --candidate [--report]`; argparse only, injects the as-of date (no wall clock).",
+    "approx_loc": 70
+   },
+   {
+    "path": "pyledger/layouts.py",
+    "purpose": "Python declarations of the record layouts mirroring the copybooks: field name, PIC string, usage (DISPLAY/COMP-3), offsets; LNMAST layout here still reflects copybook v2 (LM-WAIVE-FLAG is inside a 4-byte FILLER).",
+    "approx_loc": 120
+   },
+   {
+    "path": "pyledger/copybook.py",
+    "purpose": "PIC-clause parser and fixed-width codec: decodes/encodes 9(n)V9(m), S9 zoned (trailing overpunch), X(n), COMP-3 packed decimal; returns Decimal/str per field. Overpunch sign handling is incomplete (treats '}'..'R' as digits / drops sign on encode).",
+    "approx_loc": 170
+   },
+   {
+    "path": "pyledger/numeric.py",
+    "purpose": "COBOL-style numeric helpers used by the calculators: `rounded(value, scale)`, `truncate(value, scale)`, `fit_pic(value, pic)`; currently float-based with Python round().",
+    "approx_loc": 60
+   },
+   {
+    "path": "pyledger/dates.py",
+    "purpose": "YYMMDD parsing with century window, INTEGER-OF-DATE style day arithmetic, 30/360 (US) and ACT/365 day counts, business-day roll using the holiday file.",
+    "approx_loc": 110
+   },
+   {
+    "path": "pyledger/rates.py",
+    "purpose": "Loads RATETBL.dat (header count + OCCURS DEPENDING ON tier rows: upper balance bound, annual rate PIC 9V9(5), late-fee pct, fee min/max) and performs the tier lookup.",
+    "approx_loc": 70
+   },
+   {
+    "path": "pyledger/transactions.py",
+    "purpose": "Reads LNTRAN.dat, groups payments/reversals by account, sorts by (account, post date, seq), applies to balances, skips voided transactions.",
+    "approx_loc": 80
+   },
+   {
+    "path": "pyledger/accrual.py",
+    "purpose": "Per-account interest accrual for the period: chooses basis by product code, computes daily rate and accrued interest; single float expression today.",
+    "approx_loc": 70
+   },
+   {
+    "path": "pyledger/fees.py",
+    "purpose": "Late-fee assessment: days late vs grace period, new-account window from origination date, waive flag, tier pct with min/max caps.",
+    "approx_loc": 90
+   },
+   {
+    "path": "pyledger/status.py",
+    "purpose": "Delinquency status letter (C/L/D/X/W) from days late and account state; if/elif chain in a different order and with >= thresholds vs the COBOL EVALUATE.",
+    "approx_loc": 40
+   },
+   {
+    "path": "pyledger/writer.py",
+    "purpose": "Builds LNOUT detail records and the trailer record (record count, hash of account numbers, total accrued, total fees) using the layouts codec.",
+    "approx_loc": 90
+   },
+   {
+    "path": "pyledger/batch.py",
+    "purpose": "Orchestrates read master -> apply transactions -> accrue -> fees -> status -> write; decides which accounts are emitted and accumulates trailer totals.",
+    "approx_loc": 110
+   },
+   {
+    "path": "pyledger/recon.py",
+    "purpose": "Reconciliation tool: parses two LNOUT files with the LNOUT layout and prints per-field mismatches in the same format as logs/recon/*.txt; exit code 0 iff zero mismatches. Works correctly; not to be changed.",
+    "approx_loc": 90
+   },
+   {
+    "path": "scripts/run_shadow.sh",
+    "purpose": "Convenience script reproducing the shadow run: runs `pyledger run` on the March batch then `pyledger recon` against the mainframe output.",
+    "approx_loc": 15
+   }
+  ],
+  "data_files": [
+   {
+    "path": "legacy/LNACCR01.cbl",
+    "description": "Read-only COBOL source (~260 lines): WORKING-STORAGE with PIC clauses (WS-DAILY-RATE PIC 9V9(9), WS-ACCRUED PIC S9(9)V99), century-window paragraph (YY > 49 -> 19YY), 30/360 paragraph with both day clamps, tier lookup PERFORM VARYING 1-based with <= upper bound, COMPUTE ... ROUNDED, EVALUATE TRUE status ladder, closed-account (LM-STATUS 'Z') skip before write, trailer accumulation."
+   },
+   {
+    "path": "legacy/copybooks/LNMAST.cpy, LNTRAN.cpy, LNOUT.cpy, RATETBL.cpy",
+    "description": "Record layouts; LNMAST v3 defines LM-WAIVE-FLAG PIC X at the position the port still treats as FILLER; LNOUT defines signed zoned fields (LO-ACCRUED-INT PIC S9(9)V99, LO-BALANCE PIC S9(11)V99) and LO-RATE-TIER PIC 9."
+   },
+   {
+    "path": "data/LNMAST_202403.dat",
+    "description": "400 fixed-width 180-byte master records (zoned and COMP-3 numerics, YYMMDD dates incl. 199x originations, product codes M/A/P, grace days, waive flags, status incl. 'Z' closed) with planted edge cases."
+   },
+   {
+    "path": "data/LNTRAN_202403.dat",
+    "description": "~620 payment/reversal transaction records with overpunch-signed amounts, out-of-sequence capture order, some voided."
+   },
+   {
+    "path": "data/RATETBL_202403.dat",
+    "description": "Rate tier table: header record with tier count, 5 tier rows (upper bound, annual rate, late-fee pct, min fee, max fee), last tier catch-all."
+   },
+   {
+    "path": "data/HOLIDAYS.dat",
+    "description": "Bank holiday list (YYYYMMDD) used for due-date business-day roll."
+   },
+   {
+    "path": "data/MAINFRAME_LNOUT_202403.dat",
+    "description": "The mainframe's output for the March batch (398 detail records + trailer): the parity target; produced at build time by an independent COBOL-semantics oracle script."
+   },
+   {
+    "path": "logs/recon/recon_LNACCR01_202403.txt",
+    "description": "Reconciliation log produced by the current (buggy) port vs the mainframe output: 61 field mismatches across 37 accounts plus a trailer mismatch."
+   },
+   {
+    "path": "docs/tickets/LND-4127-shadow-parity-blocker.md",
+    "description": "Incident ticket: symptom summary, Finance's cutover criterion, note that the mainframe output is authoritative even where its arithmetic looks odd."
+   },
+   {
+    "path": "docs/pr/PR-218-port-lnaccr01-review.md",
+    "description": "Original port's review thread with reviewer doubts (round(), FILLER bytes, century, tier indexing) marked resolved without changes."
+   },
+   {
+    "path": "CHANGELOG.md",
+    "description": "Notes LNMAST copybook bump to v3 (2019) and that pyledger layouts were authored against v2 (2018 export)."
+   }
+  ],
+  "pip_deps": [
+   "pytest==8.4.1"
+  ]
+ },
+ "instruction_outline": "Framed as ticket LND-4127 handed to the engineer: pyledger is the Python port of mainframe batch LNACCR01 and must produce an LNOUT file byte-identical to the mainframe's for the same inputs and as-of date. The March 2024 shadow run (`scripts/run_shadow.sh`, or `python -m pyledger run ... --asof 2024-03-31 --out out/LNOUT.dat` followed by `python -m pyledger recon --legacy data/MAINFRAME_LNOUT_202403.dat --candidate out/LNOUT.dat`) reports mismatches; the log is in logs/recon/. The COBOL source and copybooks in legacy/ are the authoritative specification and the mainframe output is authoritative even where its arithmetic (truncation, rounding, sign encoding) looks surprising. Deliverable: fix the port so recon reports zero mismatches on the March batch; the same code will be run on other batches with the same layouts, so fix the root causes in the port's semantics (numeric, date, layout, business-rule handling) rather than special-casing accounts or the batch. Constraints: keep the CLI commands and arguments as they are; do not modify legacy/, data/, or the recon tool; the output file must remain the fixed-width LNOUT layout including the trailer. Hints at the level of a ticket only: review the PR-218 discussion, check the copybook version the layouts were written against, and expect several independent causes behind the same output field.",
+ "required_changes": [
+  "COBOL ROUNDED must be round-half-away-from-zero (not Python round() banker's rounding) when computing accrued interest and fees; unrounded MOVE/COMPUTE targets must truncate to the receiving PIC's scale.",
+  "Accrued interest must follow the COBOL two-step computation: daily rate = annual rate / basis truncated to 9 decimals (WS-DAILY-RATE PIC 9V9(9)), then balance * daily rate * days ROUNDED to 2 decimals; a single float expression yields 1-cent differences.",
+  "Zoned decimal signed fields (S9 ... DISPLAY, trailing overpunch) must be decoded on input ({A-I positive, }J-R negative) and encoded on output for LO-ACCRUED-INT and LO-BALANCE; credit-balance accounts currently lose their sign.",
+  "Two-digit years in YYMMDD fields must use the COBOL century window (YY > 49 -> 19YY, else 20YY); originations in the 1990s are currently read as 209x, which makes the new-account fee-waiver window fire and waives fees that the mainframe charges.",
+  "The 30/360 (US) day count for product code M must apply both clamps (D1=31 -> 30; D2=31 when D1>=30 -> 30) as the COBOL paragraph does.",
+  "Days late must be the exclusive integer-date difference (as-of minus rolled due date, no +1) and the grace comparison must be strictly greater than the account's grace days.",
+  "LNMAST layout must follow copybook v3: LM-WAIVE-FLAG PIC X carved out of the former FILLER; 'Y' waives the late fee.",
+  "Rate-tier lookup must use the inclusive upper bound (balance <= upper) and the tier index written to LO-RATE-TIER must be 1-based as in the COBOL OCCURS table.",
+  "Status letter must reproduce the EVALUATE TRUE first-match ladder and strict thresholds (>90 W, >60 X, >30 D, > grace L, otherwise C) instead of the port's reordered >= chain.",
+  "Closed accounts (LM-STATUS 'Z') must be excluded from output and from the trailer record count, hash total and money totals, which must be exact decimal sums."
+ ],
+ "solution_plan": [
+  {
+   "file": "pyledger/numeric.py",
+   "change": "Replace float helpers with Decimal-based `rounded` (ROUND_HALF_UP away from zero), `truncate` (ROUND_DOWN to scale) and `fit_pic` (scale truncation plus high-order digit truncation per PIC).",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "pyledger/copybook.py",
+   "change": "Implement zoned overpunch decode/encode tables for S9 DISPLAY fields; apply sign on decode, emit overpunched last digit on encode; keep COMP-3 path.",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "pyledger/layouts.py",
+   "change": "Update LNMAST layout to copybook v3: LM-WAIVE-FLAG X(1) followed by FILLER X(3) at the former FILLER position.",
+   "approx_loc_changed": 6
+  },
+  {
+   "file": "pyledger/dates.py",
+   "change": "Century window (YY > 49 -> 1900s), 30/360 with both clamps, exclusive `days_between`; holiday roll unchanged.",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "pyledger/accrual.py",
+   "change": "Two-step COMPUTE: daily rate truncated to 9 decimals, then ROUNDED product to S9(9)V99 using numeric helpers; select basis by product code.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "pyledger/fees.py",
+   "change": "Strict grace comparison, honour LM-WAIVE-FLAG, new-account window using corrected origination date, tier pct/min/max with Decimal ROUNDED.",
+   "approx_loc_changed": 25
+  },
+  {
+   "file": "pyledger/rates.py",
+   "change": "Inclusive upper-bound tier search returning 1-based index alongside the tier row.",
+   "approx_loc_changed": 10
+  },
+  {
+   "file": "pyledger/status.py",
+   "change": "Rewrite ladder to EVALUATE order with strict thresholds and grace-aware 'L'.",
+   "approx_loc_changed": 15
+  },
+  {
+   "file": "pyledger/writer.py",
+   "change": "Write signed fields via the overpunch encoder, 1-based tier index, Decimal trailer totals formatted per LNOUT PICs.",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "pyledger/batch.py",
+   "change": "Skip LM-STATUS 'Z' accounts before write and trailer accumulation; accumulate Decimal totals and hash total only over written records.",
+   "approx_loc_changed": 20
+  }
+ ],
+ "estimated_total_loc_changed": 246,
+ "test_strategy": {
+  "approach": "All tests drive the public CLI (`python -m pyledger run ...`) in a temp directory and inspect the produced LNOUT file, decoded with the LNOUT copybook layout independently inside the tests (the tests carry their own tiny fixed-width decoder so they do not import pyledger internals). (1) test_parity_march: run on the workspace March batch and compare every field of every record and the trailer with data/MAINFRAME_LNOUT_202403.dat; also assert `python -m pyledger recon` exits 0. (2) test_parity_hidden_batch: run on tests/fixtures/batch_202404/ (different 300-account master, transactions, a 6-tier rate table, different as-of date and holidays) and compare against its golden mainframe output; goldens for both batches are produced at build time by an independent straight-line COBOL-semantics oracle script (Decimal arithmetic with explicit PIC truncation/ROUNDED, not sharing code with the port), cross-checked by hand on a dozen records. (3) test_semantics_minicases: half a dozen 2-4 record hand-written batches, each isolating one spec clause derived directly from the COBOL/copybooks (half-cent rounding case, daily-rate truncation case, negative balance overpunch on input and output, 1998 origination, 30/360 D2=31 clamp, days-late = grace boundary, waive flag 'Y', balance exactly on a tier upper bound with 1-based tier code, status boundaries at 30/60/90, closed 'Z' account excluded from trailer). (4) test_trailer_invariants: trailer record count equals number of detail records, hash total equals sum of account numbers mod 10^11, money totals equal exact Decimal sums of detail fields, for both batches.",
+  "invariants_checked": [
+   "Byte-level field equality between pyledger output and mainframe output on the visible March batch and on a hidden April batch",
+   "recon command exit code 0 on the March batch",
+   "Trailer count/hash/money totals are consistent with the detail records actually written",
+   "Spec-derived mini-cases: rounding half away from zero, intermediate truncation, overpunch sign round-trip, century window, 30/360 clamps, exclusive days late with strict grace, waive flag, inclusive tier bound with 1-based tier code, EVALUATE status thresholds, closed-account exclusion",
+   "Output file length is a whole number of LNOUT records and record layout positions match the copybook"
+  ],
+  "anti_overfit_measures": [
+   "Hidden second batch with different accounts, rate table size, as-of date and holidays so per-account or per-batch special-casing fails",
+   "Goldens come from an independent COBOL-semantics oracle, not from the reference port",
+   "Tests use only the CLI and file outputs; no imports of pyledger modules, function names or internal data structures, so any restructuring (Decimal, fractions, integer-cent arithmetic) passes",
+   "Mini-cases are derived from COBOL clauses in legacy/, i.e. from the spec the agent is given, not from reference-implementation choices",
+   "No tolerance bands needed: outputs are fixed-width decimal text, so equality is the spec"
+  ],
+  "pre_apply_failure_reason": "The unmodified port reproduces the shadow-run failure: 37 accounts / 61 fields differ from data/MAINFRAME_LNOUT_202403.dat (plus the trailer), so test_parity_march, test_parity_hidden_batch, most mini-cases and the trailer test fail while recon exits non-zero."
+ },
+ "difficulty_rationale": "The recon log names fields, not causes, and several distinct root causes surface in the same field: LATE_FEE mismatches come from the century window (199x originations), the v3 copybook waive flag, the strict grace comparison and the exclusive days-late computation; DAYS_LATE and STATUS mismatches compound so that fixing thresholds to match the symptom breaks other records; ACCRUED_INT one-cent differences require understanding that COBOL truncates WS-DAILY-RATE to 9 decimals before a ROUNDED multiply, which no amount of tweaking round() reproduces. A mid-tier model typically fixes the rounding mode, patches status thresholds to the observed values, misses the FILLER-to-flag copybook change and overpunch sign encoding, and cannot get to zero mismatches; it also tends to special-case the visible batch, which the hidden batch catches. A frontier model can read 260 lines of COBOL plus copybooks, map each paragraph to a Python module, use the built-in recon tool as a tight feedback loop, and converge in one session because every fact needed is in the workspace and each fix is small once the cause is identified. The all-or-nothing parity gate plus roughly nine independent causes is what creates the gap; if pilot runs show qwen at 0%, the tier-index and closed-account defects can be removed to soften it without changing the task's shape.",
+ "determinism_notes": "The as-of date is a CLI argument; no wall-clock or random calls exist anywhere in the port, oracle or tests. All inputs are static fixed-width files; arithmetic is decimal text in/out so equality comparison is exact; sorting keys are total orders (account, post date, seq). Subprocess runs use fixed PYTHONHASHSEED-independent logic (no set iteration affects output). Tests write into pytest tmp_path only. Everything runs offline on python:3.11-slim with pytest as the sole pip dependency.",
+ "risks": [
+  "Reference solution and oracle must agree byte-for-byte on 700 records; the builder must implement the oracle as an independent transliteration and hand-verify edge records, otherwise a shared misunderstanding could make goldens wrong relative to the COBOL text.",
+  "Difficulty tuning: nine compounding causes behind an all-or-nothing gate could push mid-tier avg@8 to 0%; plan to drop 1-2 defects if pilot shows this.",
+  "Planted edge cases must actually appear in both batches (negative balances, 199x originations, tier-boundary balances, day-31 dates, exact grace/threshold days, closed accounts) or a defect could be untested; the data generator must assert coverage.",
+  "Instruction must make clear that the mainframe output is authoritative even where COBOL truncation looks like a bug, so a well-meaning agent does not 'fix' the arithmetic in the other direction.",
+  "Copybook v3 vs v2 mismatch must be discoverable (CHANGELOG + PR review + copybook header) without spelling out the fix."
+ ]
+}

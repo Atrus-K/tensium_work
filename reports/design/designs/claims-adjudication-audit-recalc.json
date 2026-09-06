@@ -1,0 +1,241 @@
+{
+ "name": "claims-adjudication-audit-recalc",
+ "category": "Operations: implementation of real business rules (claims processing / regulatory prompt-pay compliance)",
+ "title": "Fix the property-claims adjudication engine flagged by internal audit AUD-2024-117",
+ "summary": "The workspace is \"tessera-claims\", a small insurer's homeowners-contents claims adjudication service: pure-Python, stdlib-only, sqlite-backed, driven by a CLI that adjudicates a monthly batch and exports an auditor CSV. Internal audit AUD-2024-117 reviewed the June 2024 batch and filed a findings ticket listing seven claims that were over- or under-paid, plus a compliance note about missing prompt-pay interest; the batch log shows suspicious WARN lines. The defects are not in one place: policy-version selection uses the wrong date and the wrong boundary semantics, the deductible and category sublimits are applied per line item instead of per occurrence, supplemental claims are not reconciled against the occurrence's prior payments, depreciation floors age to whole years and ignores the schedule cap, prompt-pay interest ignores the per-state clock/day-type/holiday rules, and money is rounded with banker's rounding. The agent must diagnose root causes from the ticket, the product-rules document and the log, then fix the engine across policy lookup, coverage, valuation, ledger, payment scheduling, business-day calendar and rounding modules so the batch is correct for every claim (not just the seven listed), while preserving the CLI/export contract and idempotent re-runs.",
+ "real_world_grounding": "This mirrors a very common P&C-insurance engineering situation: an internal audit or state market-conduct exam recalculates a sample of paid claims against the policy form and prompt-pay statute, finds discrepancies, and engineering must trace them to root causes in an adjudication engine that several people have touched. Evidence trail living in the workspace: (1) docs/tickets/AUD-2024-117_findings.md \u2014 the auditor's ticket with narrative per claim (claim id, what was paid, what the auditor computed, rule cited, severity) and a compliance section on prompt-pay interest; (2) docs/tickets/AUD-2024-117_expected.csv \u2014 the auditor's recomputed figures for the seven sampled claims; (3) docs/adjudication_rules.md \u2014 the product/claims-handling manual excerpt: policy-version in-force rule (effective_from inclusive, effective_to exclusive, keyed on loss date), order of operations (per-line ACV -> per-occurrence per-category sublimit -> per-occurrence deductible, applied once, wind/hail percentage deductible -> cap at Coverage C limit net of prior occurrence payments), depreciation-by-months with cap, ROUND_HALF_UP at cents, and prompt-pay computation; (4) data/prompt_pay_rules.json \u2014 per-state statute parameters (clock start event, deadline days, business vs calendar days, annual rate, whether interest applies); (5) logs/batch_2024-06-30.log \u2014 the production batch log with WARN 'no policy version in force on received_date ..., falling back to latest' lines and 'interest: 0 days late' lines for claims the auditor says were late; (6) scripts/reconcile_audit.py \u2014 a tool engineering already wrote to diff engine output against the auditor's CSV, which gives the agent a realistic feedback loop for the listed claims only; (7) git history in the repo with a few plausible commits (e.g., 'add supplemental claim support', 'switch depreciation to schedule CSV') that show how the inconsistencies crept in.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "tessera/cli.py",
+    "purpose": "argparse entry point: `adjudicate --db PATH --as-of YYYY-MM-DD --batch YYYY-MM --out CSV` and `build-db --data DIR --out PATH`; injectable as-of date (no wall clock); orchestrates engine, ledger and export",
+    "approx_loc": 90
+   },
+   {
+    "path": "tessera/models.py",
+    "purpose": "dataclasses: Policy, PolicyVersion, Coverage/Sublimit, Claim, LineItem, Payment, AdjudicationResult (gross_acv, sublimit_reductions, deductible_applied, indemnity, interest, days_late)",
+    "approx_loc": 110
+   },
+   {
+    "path": "tessera/storage/schema.sql",
+    "purpose": "sqlite DDL: policies, policy_versions, coverage_sublimits, claims, line_items, payments (with occurrence_id, deductible_applied, category_acv JSON), holidays",
+    "approx_loc": 70
+   },
+   {
+    "path": "tessera/storage/db.py",
+    "purpose": "connection helper, schema creation, CSV/JSON loaders that populate the sqlite DB deterministically from data/",
+    "approx_loc": 120
+   },
+   {
+    "path": "tessera/policy/lookup.py",
+    "purpose": "select the PolicyVersion in force for a claim. DEFECT: keys on claim.received_date and treats effective_to as inclusive; falls back to latest version with a WARN instead of failing/selecting correctly",
+    "approx_loc": 55
+   },
+   {
+    "path": "tessera/policy/coverage.py",
+    "purpose": "coverage limit, per-category sublimits, deductible determination. DEFECT: returns flat deductible always; ignores wind_hail_deductible_pct (percent of dwelling limit) for perils wind/hail",
+    "approx_loc": 70
+   },
+   {
+    "path": "tessera/valuation/depreciation.py",
+    "purpose": "ACV from RCV using data/depreciation_schedule.csv. DEFECT: age = days // 365 whole years, no max_depreciation_pct cap, Python round()",
+    "approx_loc": 60
+   },
+   {
+    "path": "tessera/adjudication/rounding.py",
+    "purpose": "money helpers. DEFECT: uses float and built-in round() (banker's) instead of Decimal ROUND_HALF_UP",
+    "approx_loc": 30
+   },
+   {
+    "path": "tessera/adjudication/engine.py",
+    "purpose": "core adjudication: iterate line items, value, apply sublimits, deductible, limit, produce AdjudicationResult. DEFECT: applies sublimit per item and deductible per item, caps at limit without netting prior occurrence payments, passes received_date to lookup",
+    "approx_loc": 140
+   },
+   {
+    "path": "tessera/payments/ledger.py",
+    "purpose": "reads prior payments and writes new ones idempotently (unique on claim_id+batch). DEFECT: prior-paid and deductible-absorbed are summed by claim_id, not occurrence_id, so supplemental claims re-pay deductible and can exceed the occurrence limit",
+    "approx_loc": 85
+   },
+   {
+    "path": "tessera/payments/scheduler.py",
+    "purpose": "prompt-pay deadline and interest. DEFECT: clock starts at fnol_date, always calendar days, ignores per-state interest_applies and clock_start, rate/365 with float rounding",
+    "approx_loc": 75
+   },
+   {
+    "path": "tessera/calendar/business_days.py",
+    "purpose": "add_business_days / count between dates using holidays table. DEFECT: counts the start day and ignores holidays loaded in DB",
+    "approx_loc": 45
+   },
+   {
+    "path": "tessera/reports/audit_export.py",
+    "purpose": "writes the auditor CSV (claim_id, occurrence_id, policy_version_id, gross_acv, sublimit_reduction, deductible_applied, indemnity, interest, days_late, payment_total, state)",
+    "approx_loc": 55
+   },
+   {
+    "path": "scripts/build_db.py",
+    "purpose": "builds data/claims.db from CSV/JSON (used at image build and by tests into a temp path)",
+    "approx_loc": 35
+   },
+   {
+    "path": "scripts/reconcile_audit.py",
+    "purpose": "runs the batch and diffs the export against docs/tickets/AUD-2024-117_expected.csv, printing per-claim deltas",
+    "approx_loc": 60
+   }
+  ],
+  "data_files": [
+   {
+    "path": "data/policies.csv",
+    "description": "~25 policies: policy_id, insured, state (TX, CA, FL, OH, NY), dwelling_limit"
+   },
+   {
+    "path": "data/policy_versions.csv",
+    "description": "~55 versions/endorsements: version_id, policy_id, effective_from, effective_to, contents_limit, flat_deductible, wind_hail_deductible_pct (nullable); several renewals with boundary dates coinciding with loss dates"
+   },
+   {
+    "path": "data/coverage_sublimits.csv",
+    "description": "per-version per-category aggregate sublimits (jewelry 1500, cash 200, firearms 2500, electronics 5000 on some versions, none on others)"
+   },
+   {
+    "path": "data/claims.csv",
+    "description": "~60 claims in the June batch plus earlier ones: claim_id, policy_id, occurrence_id, claim_type (original|supplemental), peril, loss_date, fnol_date, proof_of_loss_date, received_date, status"
+   },
+   {
+    "path": "data/line_items.csv",
+    "description": "~180 line items: item_id, claim_id, category, description, rcv, purchase_date; ages straddling month boundaries and the 6-month no-depreciation threshold"
+   },
+   {
+    "path": "data/payments_history.csv",
+    "description": "prior payments on earlier claims of occurrences that have supplemental claims in June (paid amounts, deductible_applied, category_acv JSON)"
+   },
+   {
+    "path": "data/depreciation_schedule.csv",
+    "description": "category, annual_pct, max_pct, min_age_months (no depreciation under 6 months) for ~10 categories"
+   },
+   {
+    "path": "data/prompt_pay_rules.json",
+    "description": "per-state: clock_start (proof_of_loss|fnol), deadline_days, day_type (business|calendar), annual_rate, interest_applies"
+   },
+   {
+    "path": "data/holidays_2024.csv",
+    "description": "US federal holidays observed 2024 (Memorial Day, Juneteenth, July 4 fall inside relevant windows)"
+   },
+   {
+    "path": "docs/adjudication_rules.md",
+    "description": "product-rules excerpt (spec) defining every rule above with worked mini-examples"
+   },
+   {
+    "path": "docs/tickets/AUD-2024-117_findings.md",
+    "description": "auditor's ticket: 7 sampled claims with observed vs recomputed amounts, rule cited, and a compliance section on prompt-pay interest"
+   },
+   {
+    "path": "docs/tickets/AUD-2024-117_expected.csv",
+    "description": "auditor's recomputed indemnity/interest for the 7 sampled claims"
+   },
+   {
+    "path": "logs/batch_2024-06-30.log",
+    "description": "production batch log with WARN fallback lines and interest lines that contradict the ticket"
+   }
+  ],
+  "pip_deps": [
+   "pytest (tests only; application is stdlib-only: sqlite3, csv, json, decimal, datetime, argparse, tomllib not needed)"
+  ]
+ },
+ "instruction_outline": "You are on the claims-platform team at a small homeowners insurer. Internal audit ticket AUD-2024-117 (docs/tickets/) recalculated a sample of the June 2024 batch produced by `python -m tessera.cli adjudicate` and found over- and under-payments plus missing prompt-pay interest; the batch log is in logs/. The product rules the engine must implement are in docs/adjudication_rules.md; per-state prompt-pay parameters are in data/prompt_pay_rules.json. Diagnose the root causes and fix the engine so that the batch is correct per the rules document for all claims in the dataset (the audit only sampled seven; the same defects affect others), including supplemental claims sharing an occurrence with previously paid claims. Constraints: keep the CLI contract (`build-db`, `adjudicate --db --as-of --batch --out`) and the export CSV column set; re-running the same batch must not create duplicate payments and must produce identical output; use the injected --as-of date as the payment date (no wall clock); do not edit data/ CSV/JSON files, the rules document, or the ticket; monetary values are cents-precision per the rules document. scripts/reconcile_audit.py can be used to check the seven sampled claims, but resolving only those is not sufficient. Mentions that the fix is expected to span several modules and that the log's WARN lines are a clue, without naming the defects or the hidden test cases.",
+ "required_changes": [
+  "Policy version selection must key on the claim's loss_date (not received_date) and use half-open in-force interval [effective_from, effective_to); a claim whose loss date has no in-force version must be rejected (status 'no_coverage', no payment) rather than silently falling back to the latest version",
+  "Deductible must be applied once per occurrence across all line items and across original + supplemental claims (tracking deductible already absorbed via prior occurrence payments); for perils wind/hail with a version-level wind_hail_deductible_pct, the deductible is pct x dwelling_limit (ROUND_HALF_UP to cents) instead of the flat deductible",
+  "Category sublimits are aggregate per occurrence per category: sum the ACV of all items in that category across the occurrence's adjudicated claims (prior claims' category_acv from the ledger plus the current claim), cap at the sublimit, and attribute only the remaining headroom to the current claim",
+  "Order of operations: per-line ACV (rounded per line) -> per-occurrence category sublimit reduction -> deductible remaining -> cap at contents_limit minus prior occurrence payments; indemnity never negative; deductible_applied recorded is the amount actually absorbed",
+  "Depreciation: age in whole months (calendar-month arithmetic, day-of-month aware) between purchase_date and loss_date; no depreciation when age < min_age_months; depreciation = min(max_pct, annual_pct x months/12); ACV = RCV x (1 - depreciation) rounded ROUND_HALF_UP to cents",
+  "All money arithmetic uses Decimal with ROUND_HALF_UP at cents; no float/banker's rounding anywhere in engine, valuation, scheduler, export",
+  "Prompt-pay: per-state clock_start event (proof_of_loss or fnol), deadline = start + deadline_days counted as business days (excluding weekends and holidays from the holidays table, not counting the start day) or calendar days per day_type; days_late = calendar days from deadline to payment date (--as-of) if positive; interest = indemnity x annual_rate x days_late / 365 ROUND_HALF_UP to cents; zero when interest_applies is false, indemnity is zero, or not late",
+  "Business-day helper must exclude holidays loaded from data/holidays_2024.csv and must not count the start day",
+  "Ledger: prior paid, deductible absorbed and category ACVs must be aggregated by occurrence_id (history + payments created earlier in the same batch, processed in deterministic loss_date/received_date/claim_id order); writing payments remains idempotent per (claim_id, batch) and re-runs overwrite/skip rather than duplicate",
+  "Export CSV must carry correct interest, days_late, deductible_applied, and policy_version_id for every claim; claims with no in-force version appear with status no_coverage and zero amounts"
+ ],
+ "solution_plan": [
+  {
+   "file": "tessera/policy/lookup.py",
+   "change": "select by loss_date with half-open interval; remove latest-version fallback; return None/raise NoCoverage handled by engine",
+   "approx_loc_changed": 22
+  },
+  {
+   "file": "tessera/policy/coverage.py",
+   "change": "add deductible_for(version, peril) implementing wind/hail percentage deductible with Decimal ROUND_HALF_UP; expose sublimits as per-category aggregate map",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "tessera/valuation/depreciation.py",
+   "change": "whole-month age function, min_age_months threshold, max_pct cap, Decimal rounding",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "tessera/adjudication/rounding.py",
+   "change": "Decimal-based money(), round_cents() with ROUND_HALF_UP; remove float helpers",
+   "approx_loc_changed": 15
+  },
+  {
+   "file": "tessera/adjudication/engine.py",
+   "change": "restructure: pass loss_date to lookup, handle no_coverage, compute per-line ACV, aggregate per-category with occurrence prior category ACVs, apply sublimit headroom, deductible remaining once, cap at limit minus occurrence prior paid, record deductible_applied and category_acv on result",
+   "approx_loc_changed": 95
+  },
+  {
+   "file": "tessera/payments/ledger.py",
+   "change": "occurrence-scoped queries for prior_paid, deductible_absorbed, category_acv (merging history and in-batch payments); persist deductible_applied and category_acv JSON; idempotent upsert on (claim_id, batch)",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "tessera/payments/scheduler.py",
+   "change": "per-state rule application: clock_start selection, business vs calendar deadline, interest_applies gate, Decimal interest formula",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "tessera/calendar/business_days.py",
+   "change": "load holidays from DB; add_business_days excludes start day, weekends, holidays",
+   "approx_loc_changed": 18
+  },
+  {
+   "file": "tessera/reports/audit_export.py",
+   "change": "emit status column value no_coverage, Decimal formatting to 2dp, use result.deductible_applied/interest/days_late",
+   "approx_loc_changed": 12
+  },
+  {
+   "file": "tessera/cli.py",
+   "change": "deterministic claim ordering, propagate no_coverage results, pass as_of to scheduler as payment date",
+   "approx_loc_changed": 12
+  }
+ ],
+ "estimated_total_loc_changed": 319,
+ "test_strategy": {
+  "approach": "Hidden pytest suite in /tests drives only the observable contract: it runs `python -m tessera.cli build-db` into a temp path and `adjudicate --as-of 2024-06-30 --batch 2024-06 --out` via subprocess, then reads the export CSV and the sqlite payments table. Expected values are golden figures hand-derived from docs/adjudication_rules.md (derivations kept as comments in the tests) for (a) the seven audited claims, (b) ~10 unlisted claims in the shipped dataset that exercise the same rules with different parameters, and (c) a second, test-private fixture dataset (tests/fixtures/alt_dataset/*.csv, *.json) with boundary cases the agent never saw: loss on effective_from (covered) vs on effective_to (not covered), deductible exceeding gross (indemnity 0, deductible_applied == gross), supplemental claim exhausting the occurrence limit, jewelry sublimit already consumed by the original claim, item aged exactly min_age_months, TX deadline spanning Memorial Day and a weekend, OH state with interest_applies=false, CA calendar-day deadline. A small independent oracle for business-day counting and interest lives in the tests to cross-check every claim's interest rather than only goldens.",
+  "invariants_checked": [
+   "For every occurrence, sum of indemnity across its claims (history + batch) <= contents_limit of the in-force version",
+   "For every occurrence, total deductible_applied across all its payments == min(occurrence deductible, sum of sublimit-capped ACV), i.e., the deductible is absorbed exactly once",
+   "No negative indemnity, interest, or deductible_applied anywhere; all monetary fields have at most 2 decimals and match Decimal ROUND_HALF_UP recomputation from line-item RCV/age via an independent depreciation oracle in the tests",
+   "interest == 0 for every claim whose state has interest_applies=false, whose indemnity is 0, or whose deadline >= as-of date; interest > 0 for every claim the independent oracle says is late",
+   "Per-category ACV attributed across an occurrence never exceeds that version's sublimit for the category",
+   "Claims with loss_date outside every version's [from, to) appear with status no_coverage and zero amounts, and no payment row exists for them",
+   "Running the batch twice yields a byte-identical export and no additional payment rows (idempotency)",
+   "The audit's seven sampled claims match docs/tickets/AUD-2024-117_expected.csv within 0.00 (cents-exact)"
+  ],
+  "anti_overfit_measures": [
+   "Golden values for unlisted dataset claims and for a test-private alt fixture dataset the agent cannot see, so hard-coding the seven audited claims fails",
+   "Property/invariant checks computed over every claim in both datasets rather than asserting specific implementation structure; no test imports internal functions by name except the documented CLI, the sqlite schema tables named in the instruction (payments), and the export column set",
+   "Tolerances are exact-cents per the spec (the spec defines the rounding), but assertions compare numeric Decimals parsed from CSV, not string formatting, so '1500.0' vs '1500.00' both pass",
+   "Independent oracles inside tests (business-day/interest, depreciation) are written separately from the reference solution and validated by hand against the rules document's worked examples",
+   "Tests accept either an exception-free no_coverage status row or absence of payment for uncovered claims, but require zero amounts and no payment row; status wording is taken from the instruction's stated contract",
+   "Pre-apply run is confirmed to fail on golden, invariant and idempotency-independent tests so success cannot come from a weak subset"
+  ],
+  "pre_apply_failure_reason": "Pre-apply, the shipped engine applies the deductible per line item and sublimits per item, selects policy versions by received_date with inclusive end and falls back to latest, floors depreciation age to years without cap, ignores per-state prompt-pay parameters and holidays, and uses banker's rounding; therefore the seven audited claims, the unlisted golden claims, the alt-fixture boundary cases, and the deductible-once and interest invariants all fail, while the sublimit-per-occurrence invariant fails on occurrences with multiple jewelry items."
+ },
+ "difficulty_rationale": "A mid-tier model tends to (1) patch engine.py until scripts/reconcile_audit.py reports the seven sampled claims fixed, missing that supplemental-claim reconciliation needs occurrence-scoped ledger queries and persisted per-category ACV; (2) fix the loss-date bug but keep the inclusive effective_to or the latest-version fallback, which the alt fixture catches; (3) implement business days without excluding holidays or while counting the start day, off by one on TX deadlines that straddle Memorial Day; (4) keep float arithmetic or round() so cents drift on several claims; (5) apply the wind/hail percentage deductible only when the finding mentions it, or apply it per claim rather than once per occurrence; (6) not realize category sublimits aggregate across original and supplemental claims. Each defect requires connecting the rules document to two or three modules whose assumptions disagree, and the ticket describes symptoms, not causes. A frontier model can finish in one session because the workspace is self-contained: the rules document is explicit with worked examples, the ticket cites the rule for each finding, the log points at lookup.py's fallback, the code is ~1100 lines, no external toolchain is needed, and the reconcile script gives fast partial feedback while the instruction warns that unlisted claims are also affected.",
+ "determinism_notes": "No wall-clock use: the payment date is the injected --as-of value and the batch is selected by --batch; tests always pass fixed values. All data is static CSV/JSON committed in the workspace; the sqlite DB is rebuilt from CSVs into a temp path by each test so pre/post states cannot contaminate each other. Claims are processed in a deterministic order (loss_date, received_date, claim_id) and the ledger queries are ordered. All arithmetic uses Decimal with an explicit rounding mode; no floating-point in outputs. No network, no randomness, stdlib-only application; pytest is the only pip dependency and is installed in the Dockerfile at build time. Holidays are a fixed 2024 table so business-day calculations never depend on the system locale or timezone (dates are naive ISO dates).",
+ "risks": [
+  "Golden values must be derived carefully by the implementer with an independent script and a hand check against the rules document's worked examples; an arithmetic slip in a golden would make the task unsolvable, so pre/post validation of every golden is mandatory",
+  "The rules document must be unambiguous on every edge the tests probe (half-open interval, month-age arithmetic on end-of-month dates, start day not counted, ROUND_HALF_UP, interest on indemnity not on gross) or an equally valid alternate reading could fail tests; the implementer should write worked examples for each edge into the document",
+  "Scope creep: seven root causes across nine modules is at the upper end of a single-session build; if time is short, drop the wind/hail percentage deductible (keeping six defects, still ~280 changed lines) rather than weakening tests",
+  "Tests must not depend on internal module names since an agent might legitimately restructure engine.py; the CLI, export columns, and the payments table are the only contract and must be stated in instruction.md",
+  "Ensure the shipped repo has no leftover correct implementation in git history or a stray branch that an agent could recover; commit history should show plausible regressions, not the fix",
+  "The no_coverage behavior is a spec requirement rather than a pure bug fix; instruction.md must state that uncovered claims must not be paid and how they appear in the export, otherwise the test would introduce an unstated requirement"
+ ]
+}

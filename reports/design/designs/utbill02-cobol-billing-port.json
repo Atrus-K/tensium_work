@@ -1,0 +1,227 @@
+{
+ "name": "utbill02-cobol-billing-port",
+ "category": "Rewriting / cross-language migration: port a legacy COBOL batch program (UTBILL02) to Python with byte-identical outputs",
+ "title": "Finish the Python port of the UTBILL02 COBOL utility-billing batch so it reproduces the mainframe cycle outputs byte-for-byte",
+ "summary": "The codebase is `utilbill`, a half-finished Python port of a municipal water/sewer billing batch program written in COBOL (UTBILL02 plus three copybooks and its JCL, all present read-only under legacy/). The program runs a classic balance-line merge of a fixed-width ACCOUNT-MASTER file (zoned-decimal overpunch and COMP-3 packed fields) against a METER-READS transaction file, computes consumption (6-digit register rollover, meter exchanges, estimated reads), prices it against a RATE-TABLE with block tariffs that can change mid-period (day-prorated), adds sewer/minimum/senior-discount/tax/late-penalty charges with COBOL ROUNDED and truncation semantics, and writes an updated master file plus a paginated, control-break Bill Register and an Exceptions report. A contractor ported the skeleton before mainframe access ended; the regression diff attached to ticket MIGRATION-2117 shows the port crashes on packed fields, mis-rounds, mis-prorates, mis-handles negative balances and duplicate reads, and formats the reports wrongly. The agent must complete and correct the port across the numeric codec, record layouts, consumption, rate proration, charges, balance-line driver, report writers, master writer and CLI so the cycle 2024-03 fixtures reproduce the captured mainframe outputs exactly and unseen future cycles are billed correctly.",
+ "real_world_grounding": "Mainframe decommissions routinely leave teams porting COBOL batch jobs to Python with the only acceptance test being \"reproduce last cycle's SYSOUT byte-for-byte\". The workspace contains the full evidence trail a real team would have: (1) legacy/UTBILL02.cbl (~650 lines) with IDENTIFICATION/ENVIRONMENT/DATA/PROCEDURE divisions, paragraphs 1000-INIT, 2000-BALANCE-LINE, 2100-READ-MASTER, 2200-READ-TRANS, 3000-COMPUTE-CONSUMPTION, 3100-ESTIMATE, 4000-PRICE-WATER (with 4100-PRORATE-SCHEDULE), 4500-OTHER-CHARGES, 5000-WRITE-REGISTER (page/control-break logic), 5500-WRITE-EXCEPTION, 6000-REWRITE-MASTER, 9000-EOJ; (2) legacy/copybooks/ACCTMAST.cpy, METRREAD.cpy, RATETABL.cpy with PIC clauses, COMP-3 fields, FILLERs and 88-levels; (3) legacy/jcl/UTBILL02.jcl showing DD names, the SYSIN cycle-date card and the RETURN-CODE convention (0 clean, 4 exceptions written); (4) fixtures/cycle_2024_03/ with the real binary input files and the captured mainframe outputs (ACCTMAST.new.dat, BILLREG.rpt, EXCEPTNS.rpt); (5) docs/MIGRATION-2117.md, the ticket with the contractor's status table and the `tools/diff_outputs.py` diff excerpt (first crash traceback on COMP-3, then per-line mismatches); (6) docs/porting_notes_cobol_semantics.md, the team's notes on ROUNDED (half-up away from zero), truncation on unrounded COMPUTE/MOVE, ASCII overpunch table ({ABCDEFGHI positive, }JKLMNOPQR negative), COMP-3 nibble layout with C/D/F sign, edited pictures (Z, 9, comma, period, floating $, trailing -, BLANK WHEN ZERO), and the balance-line pattern; (7) docs/finance_verification_sheet.md with six hand-computed bills (including a mid-period rate change, a meter exchange, a credit balance and an estimated read) that independently confirm the expected outputs.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "utilbill/cli.py",
+    "purpose": "argparse entry (`python -m utilbill run --cycle-date YYYYMMDD --master --reads --rates --out-dir`); orchestrates load, balance line, writers; sets exit code (currently always 0, ignores cycle date and uses date.today())",
+    "approx_loc": 80
+   },
+   {
+    "path": "utilbill/layouts.py",
+    "purpose": "hand-declared Field/Record layouts (name, offset, length, PIC, usage DISPLAY/COMP-3) for ACCTMAST (120 bytes), METRREAD (40 bytes), RATETABL (60 bytes); two offsets drift from the copybooks because a FILLER was dropped and one COMP-3 length is wrong",
+    "approx_loc": 95
+   },
+   {
+    "path": "utilbill/cobol_numeric.py",
+    "purpose": "PIC parsing, zoned-decimal decode/encode (positive only today), COMP-3 decode/encode (raise NotImplementedError), cobol_round (wrongly uses Python round), cobol_truncate, edited-picture formatter (handles only Z/9/comma)",
+    "approx_loc": 140
+   },
+   {
+    "path": "utilbill/record_io.py",
+    "purpose": "fixed-length record reader/writer that maps bytes <-> field dicts via layouts, preserving untouched bytes (FILLER) for rewrite",
+    "approx_loc": 70
+   },
+   {
+    "path": "utilbill/cycle_dates.py",
+    "purpose": "YYYYMMDD PIC 9(8) parsing/formatting, days_between, period containment used by proration and penalty",
+    "approx_loc": 40
+   },
+   {
+    "path": "utilbill/rate_schedule.py",
+    "purpose": "loads RATETABL.dat into schedules keyed by rate class + effective date; block pricing; schedule selection (no proration across an effective date inside the read period yet)",
+    "approx_loc": 95
+   },
+   {
+    "path": "utilbill/consumption.py",
+    "purpose": "consumption from prior/current reads: rollover, meter-exchange, estimated-read average and history shift (rollover and exchange partially wrong, history shift applied to estimates too)",
+    "approx_loc": 60
+   },
+   {
+    "path": "utilbill/charges.py",
+    "purpose": "port of 4500-OTHER-CHARGES: sewer (winter average cap), minimum bill, senior discount, tax, late penalty, totals (several steps missing or unrounded)",
+    "approx_loc": 110
+   },
+   {
+    "path": "utilbill/balance_line.py",
+    "purpose": "master/transaction merge driver producing billed accounts, rewritten master records and exception rows (mis-handles multiple reads per account, unmatched reads, negative-consumption tolerance)",
+    "approx_loc": 105
+   },
+   {
+    "path": "utilbill/reports.py",
+    "purpose": "Bill Register and Exceptions report writers: headers, detail lines, district control-break totals, 60-line pagination, grand totals (pagination/control breaks/edit pictures incomplete)",
+    "approx_loc": 150
+   },
+   {
+    "path": "utilbill/master_writer.py",
+    "purpose": "re-encodes updated master fields (prior read, read date, balance, consumption history) into the 120-byte record and writes ACCTMAST.new.dat",
+    "approx_loc": 45
+   },
+   {
+    "path": "utilbill/exception_codes.py",
+    "purpose": "E01-E04 exception codes and their fixed 30-char messages as printed by 5500-WRITE-EXCEPTION",
+    "approx_loc": 25
+   },
+   {
+    "path": "utilbill/__init__.py + utilbill/__main__.py",
+    "purpose": "package init and `python -m utilbill` dispatch",
+    "approx_loc": 12
+   },
+   {
+    "path": "tools/diff_outputs.py",
+    "purpose": "contractor's byte/line diff tool used to produce the mismatch excerpt in the ticket; prints first differing line and column, useful for the agent's self-check",
+    "approx_loc": 60
+   }
+  ],
+  "data_files": [
+   {
+    "path": "legacy/UTBILL02.cbl",
+    "description": "the complete legacy COBOL program (~650 lines), read-only; the authoritative specification of every rule, rounding, report layout and control flow"
+   },
+   {
+    "path": "legacy/copybooks/ACCTMAST.cpy, METRREAD.cpy, RATETABL.cpy",
+    "description": "record layouts with PIC clauses (S9 overpunch, V implied decimals, COMP-3 packed), FILLERs, OCCURS 3 for consumption history, 88-level condition names for read type and rate class"
+   },
+   {
+    "path": "legacy/jcl/UTBILL02.jcl",
+    "description": "job step showing DD names, SYSIN card `CYCLE 20240315`, output datasets, and COND/RETURN-CODE convention (0 clean, 4 exceptions)"
+   },
+   {
+    "path": "fixtures/cycle_2024_03/ACCTMAST.dat",
+    "description": "62 binary 120-byte master records across 3 districts with zoned and packed fields, signed balances (credits), senior flags, winter averages, 3-slot consumption history"
+   },
+   {
+    "path": "fixtures/cycle_2024_03/METRREAD.dat",
+    "description": "71 40-byte read transactions sorted by account then date: actual and estimated reads, a meter exchange (old final + new start), two reads for one account, reads for non-existent accounts, a same-date duplicate"
+   },
+   {
+    "path": "fixtures/cycle_2024_03/RATETABL.dat",
+    "description": "14 60-byte rate records: classes R1,R2,C1,C2,I1 with block thresholds/prices (COMP-3), minimum charge, effective dates 20231001 and 20240301 (mid-period for many accounts)"
+   },
+   {
+    "path": "fixtures/cycle_2024_03/SYSIN.card",
+    "description": "the cycle-date control card consumed by the legacy job"
+   },
+   {
+    "path": "fixtures/cycle_2024_03/expected/ACCTMAST.new.dat, BILLREG.rpt, EXCEPTNS.rpt",
+    "description": "captured mainframe outputs for the cycle: updated master (byte-exact), paginated Bill Register with district subtotals and grand totals, Exceptions report"
+   },
+   {
+    "path": "docs/MIGRATION-2117.md",
+    "description": "ticket: decommission context, contractor status table per paragraph, regression diff excerpt (traceback + first mismatching lines), acceptance = byte-identical outputs and correct future cycles"
+   },
+   {
+    "path": "docs/porting_notes_cobol_semantics.md",
+    "description": "team porting notes: ROUNDED vs truncation, overpunch and COMP-3 tables with examples, edited-picture rules, balance-line algorithm, RETURN-CODE mapping"
+   },
+   {
+    "path": "docs/field_dictionary.md",
+    "description": "copybook field -> Python field-name mapping with offsets and PICs (one entry deliberately still says 'verify against copybook')"
+   },
+   {
+    "path": "docs/finance_verification_sheet.md",
+    "description": "six hand-calculated bills step by step (rate-change proration, meter exchange, estimated read, credit balance, senior non-residential, minimum bill) matching lines in BILLREG.rpt"
+   }
+  ],
+  "pip_deps": [
+   "pytest==8.4.1"
+  ]
+ },
+ "instruction_outline": "Framed as ticket MIGRATION-2117 handed to the engineer taking over from the contractor. Context: the mainframe running UTBILL02 is being decommissioned; the Python port in utilbill/ was started but the regression run against cycle 2024-03 crashes and, once patched locally, diverges from the captured SYSOUT; the contractor is gone. The legacy program, copybooks, JCL and the cycle 2024-03 inputs plus captured outputs are in the workspace and are the specification; legacy/ and fixtures/ must not be modified. Deliverable: `python -m utilbill run --cycle-date 20240315 --master fixtures/cycle_2024_03/ACCTMAST.dat --reads .../METRREAD.dat --rates .../RATETABL.dat --out-dir <dir>` must produce ACCTMAST.new.dat, BILLREG.rpt and EXCEPTNS.rpt that are byte-identical to fixtures/cycle_2024_03/expected/, and must implement every rule of the COBOL program (not just the paths the fixture happens to exercise) so that the 2024-04 cycle and later can be run without the mainframe: zoned/COMP-3 decoding and re-encoding, ROUNDED/truncation semantics, consumption rules, block pricing with day-proration across a rate effective date, sewer/minimum/senior/tax/penalty, balance-line handling of multiple, unmatched, duplicate and negative reads with E01-E04 exceptions, the 60-line paginated register with district and grand totals, edited pictures, and RETURN-CODE mapping to process exit code (0 no exceptions, 4 exceptions written). Cycle date must come only from --cycle-date (never the clock); arithmetic must be exact decimal; an unchanged master (empty reads file) must round-trip byte-for-byte. Keep the existing public codec entry points in utilbill.cobol_numeric (decode_zoned/encode_zoned/decode_packed/encode_packed/format_edited) since the reconciliation tooling imports them. Pointers to the porting notes, field dictionary, verification sheet and tools/diff_outputs.py. No mention of tests, hidden data, or reward.",
+ "required_changes": [
+  "Zoned-decimal codec: decode and encode negative values via ASCII overpunch (}JKLMNOPQR) and honor implied decimals from the PIC V clause; encoding must produce the exact bytes the mainframe wrote",
+  "COMP-3 packed-decimal codec: implement decode/encode (currently NotImplementedError) with correct nibble packing, odd-digit padding, C/D/F sign nibbles and scale",
+  "COBOL ROUNDED semantics: replace Python banker's rounding with half-up away from zero at the receiving field's scale; unrounded COMPUTE/MOVE targets must truncate toward zero; intermediates stay exact",
+  "Edited-picture formatter: support Z suppression, floating $, insertion commas/periods, trailing '-' sign for negatives, B blanks and BLANK WHEN ZERO exactly as the report PICs in the copybook/program",
+  "Record layouts: reconcile ACCTMAST/METRREAD/RATETABL offsets and lengths with the copybooks (missing FILLER shifts fields; wrong COMP-3 byte length), so master rewrite preserves all untouched bytes",
+  "Consumption: 6-digit register rollover (add 1,000,000 when current < prior within tolerance), meter-exchange formula (old final - prior) + (current - new start), estimated read uses truncated average of the 3-slot actual-consumption history, and history shift only on actual reads",
+  "Rate schedule proration: when a schedule's effective date falls inside (prior read date, current read date], split the period by days, allocate consumption ROUNDED by day share, prorate block thresholds by the same share (truncated to whole units), price each portion against its schedule and sum",
+  "Other charges: sewer charged on min(consumption, winter average) for residential classes only; minimum water charge substitution; 15% senior discount on water only for residential accounts flagged 'Y', ROUNDED; 6% tax on water+sewer ROUNDED; 1.5% late penalty on positive balance forward only, ROUNDED; total due = balance forward + all charges; credit balances printed with trailing '-'",
+  "Balance line: apply multiple reads for one account in file order each using the updated prior read; E01 for reads with no master; E02 negative consumption beyond tolerance (skip billing, master unchanged); E03 rate class not in table; E04 duplicate read on the same date; masters with no read are rewritten unchanged and get no register line or penalty",
+  "Bill Register: header block with cycle date and page number, 60 lines per page, district control-break subtotals (accounts, consumption, total billed), grand totals, exact column positions and edit pictures; Exceptions report layout per 5500-WRITE-EXCEPTION",
+  "Master writer: re-encode prior read, read date, balance, consumption history slots and estimate flag into the record with correct zoned/packed encodings; unchanged records must be emitted byte-identically",
+  "CLI: take cycle date only from --cycle-date, write the three outputs with the legacy names in --out-dir, exit 0 when no exceptions and 4 when any exception line was written"
+ ],
+ "solution_plan": [
+  {
+   "file": "utilbill/cobol_numeric.py",
+   "change": "implement negative overpunch decode/encode, full COMP-3 decode/encode, half-up cobol_round and truncation, complete edited-picture formatter (floating $, trailing -, B, BLANK WHEN ZERO)",
+   "approx_loc_changed": 95
+  },
+  {
+   "file": "utilbill/layouts.py",
+   "change": "restore dropped FILLER, fix METRREAD read-type/meter-change offsets, fix COMP-3 field lengths to match copybooks",
+   "approx_loc_changed": 14
+  },
+  {
+   "file": "utilbill/consumption.py",
+   "change": "correct rollover tolerance, meter-exchange formula, truncated 3-slot average for estimates, history shift only for actual reads",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "utilbill/rate_schedule.py",
+   "change": "add effective-date split, day-share allocation with ROUNDED, prorated block thresholds, per-portion pricing and summation",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "utilbill/charges.py",
+   "change": "sewer winter-average cap by class, minimum substitution, senior discount conditions, tax and penalty rounding, total and sign handling",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "utilbill/balance_line.py",
+   "change": "sequential multi-read application with updated prior, E01-E04 detection order, unchanged-master passthrough, exception collection",
+   "approx_loc_changed": 38
+  },
+  {
+   "file": "utilbill/reports.py",
+   "change": "page header/footer with counters, 60-line pagination, district control-break subtotals and grand totals, exact column layout via edited pictures, exceptions report lines",
+   "approx_loc_changed": 70
+  },
+  {
+   "file": "utilbill/master_writer.py",
+   "change": "encode all updated fields (packed and zoned) and preserve untouched bytes",
+   "approx_loc_changed": 18
+  },
+  {
+   "file": "utilbill/cli.py",
+   "change": "remove date.today(), require --cycle-date, exit code 0/4 mapping, output naming",
+   "approx_loc_changed": 16
+  }
+ ],
+ "estimated_total_loc_changed": 366,
+ "test_strategy": {
+  "approach": "Behavior-only verification through the CLI and file outputs. (1) Run the visible cycle 2024-03 and compare all three output files byte-for-byte against the captured mainframe outputs shipped in fixtures; assert exit code 4. (2) Run a hidden cycle 2024-04 (about 130 masters across 4 districts, 160 reads) whose inputs and expected outputs live under /tests/data and were produced by the author's independent oracle (a separate minimal straight-line transcription of the COBOL, cross-checked against the six hand-computed bills in the verification sheet); this cycle exercises every branch of the COBOL program including rollover, exchange, two-reads-per-account, unmatched, duplicate, missing rate class, credit balance, senior non-residential, estimated read, mid-period rate change, zero consumption blank-when-zero, and enough lines to force multiple page breaks and a district break at a page boundary. (3) Invariant: running with an empty METRREAD file must rewrite the master byte-identically and exit 0. (4) Determinism: two runs into different directories produce identical bytes; passing a different --cycle-date changes only the header date field. (5) Small codec table tests against the public entry points the instruction requires to be kept (spec-listed byte sequences from the porting notes for zoned and packed values, plus encode(decode(x)) == x over a fixed sample of master records) and edited-picture cases taken from the report PICs. (6) Exit-code semantics: hidden cycle variant with all exceptions removed must exit 0.",
+  "invariants_checked": [
+   "ACCTMAST.new.dat, BILLREG.rpt, EXCEPTNS.rpt byte-identical to mainframe captures for cycle 2024-03",
+   "byte-identical outputs for the unseen cycle 2024-04 derived from an independent oracle",
+   "empty transaction file => output master == input master bytes, exit 0",
+   "outputs are deterministic across runs and independent of wall clock",
+   "exit code 4 iff at least one exception line was written, else 0",
+   "zoned/packed codecs round-trip every record in both fixture masters and decode the spec-listed byte examples",
+   "legacy/ and fixtures/ inputs are unmodified after a run (hash check)"
+  ],
+  "anti_overfit_measures": [
+   "hidden second cycle with different accounts, districts, dates and rate table prevents copying or hard-coding the visible goldens",
+   "goldens come from the COBOL program semantics (independent oracle + hand-computed verification sheet), not from the reference solve.sh's structure",
+   "no assertions on module names, class names or internal call structure; only the five codec entry points the instruction explicitly says to preserve are imported",
+   "tests compare whole-file bytes and exit codes, so any internal design (Decimal vs integer cents, dataclasses vs dicts, streaming vs in-memory) passes",
+   "invariant tests (round-trip, determinism, clean-cycle exit code) hold for any correct implementation"
+  ],
+  "pre_apply_failure_reason": "The CLI raises NotImplementedError while decoding the first COMP-3 field of ACCTMAST.dat, so every output-comparison test fails; even if that were bypassed, layout offsets, banker's rounding, missing proration and incomplete report formatting make the byte comparisons fail, the empty-reads round-trip fails because positive-only zoned encoding and wrong COMP-3 lengths corrupt the rewrite, and the exit code is always 0."
+ },
+ "difficulty_rationale": "The agent must read ~650 lines of COBOL plus copybooks and translate them faithfully rather than invent logic, which requires simultaneously getting right: two binary numeric encodings (overpunch and packed decimal with sign nibbles), COBOL ROUNDED (half-up away from zero) versus truncation on unrounded targets, a subtle day-prorated block tariff across a mid-period effective date, sequential multi-transaction balance-line semantics, exact fixed-column edited-picture report formatting with pagination and control breaks, and byte-preserving master rewrite. Mid-tier models typically use float or Python round(), get the packed sign nibble or odd-digit padding wrong, prorate by scaling prices instead of thresholds, apply the second read against the original prior read, forget that history shifts only on actual reads, and eyeball the report layout instead of reproducing PIC columns; any one of these breaks byte-exact comparison on the hidden cycle. They also must notice that layouts.py disagrees with the copybooks (a dropped FILLER) instead of patching symptoms downstream. A frontier model can finish in one session because the COBOL source is a complete, unambiguous spec, the porting notes explain each semantic, the visible cycle's captured outputs and tools/diff_outputs.py allow tight iterative self-verification, and the verification sheet gives hand-computed intermediates for the hardest cases.",
+ "determinism_notes": "All inputs are static binary/text fixtures; the cycle date is injected via --cycle-date (tests pass fixed dates), and the instruction forbids wall-clock use. All arithmetic is exact decimal per COBOL semantics, so byte-exact comparison is stable. Files are processed in stored (pre-sorted) order as the legacy job did, so no sorting nondeterminism. Reports are pure functions of inputs. No network, no randomness, no subprocesses beyond the CLI itself. The implementer must generate the hidden cycle goldens with an independent oracle script and verify them against the hand-computed verification sheet before shipping; the same oracle regenerates the visible captured outputs so the two agree with the COBOL source.",
+ "risks": [
+  "No COBOL compiler is available, so the 'captured mainframe outputs' are produced by the author's oracle; the implementer must write that oracle independently of the reference solution and cross-check against hand-computed bills to avoid encoding a shared bug into both",
+  "Byte-exact report comparison is unforgiving: the COBOL source and copybooks must specify every column, header and edit picture unambiguously, otherwise tests add requirements the agent cannot infer (mitigated by shipping the visible expected reports and precise report-line copybooks)",
+  "Too many simultaneous defects could push qwen-class avg@8 to 0 and frontier pass@8 down; keep each defect small and localized, ensure the visible cycle exercises most paths, and keep the hidden cycle within the semantics visibly present in the COBOL",
+  "Agents may be tempted to edit fixtures/expected or the legacy source; tests hash legacy/ and fixtures/ after a run and use pristine copies from /tests/data for the hidden cycle",
+  "Codec entry-point tests couple lightly to names; kept minimal and justified by the instruction's explicit compatibility requirement, with most weight on file-level behavior",
+  "Binary fixture files must be checked into the environment exactly (no newline translation); Dockerfile copies with cp -a and tests open files in binary mode"
+ ]
+}

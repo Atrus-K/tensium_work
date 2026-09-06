@@ -1,0 +1,174 @@
+{
+ "category": "Security hardening / reverse-engineering patches",
+ "name": "pkgvault-extract-hardening",
+ "title": "Harden the PkgVault container extractor against the PKV1 format spec",
+ "summary": "PkgVault is a small Python library that reads and extracts files from a custom signed container format (\"PKV1\"), used to ship configuration bundles to customer appliances. The workspace contains the authoritative format specification (SPEC-PKV1.md), an incident report (INCIDENT-2043.md) describing a real escape where a crafted bundle wrote files outside the extraction root on a customer box, and a multi-module implementation whose extractor, reader, verifier, and decompressor all trust attacker-controlled fields. The agent must harden the extraction path so it faithfully implements the security rules the spec already documents: constant-scope HMAC signature verification, path-traversal and symlink containment, per-entry checksum enforcement before write, declared-size/ratio limits against decompression bombs, and TOC/offset bounds validation. The deliverable is a corrected Python package that refuses every malformed or malicious bundle with the documented exception types while still extracting well-formed signed bundles byte-for-byte. The bug is not one symptom but six spec violations spread across five modules that must be reconciled with the spec's stated ordering guarantees.",
+ "real_world_grounding": "This mirrors the classic \"our archive extractor got zip-slipped in production\" work: a format that predates a security review, an incident ticket, and a spec that says the right thing while the code does not. The evidence trail in the workspace is concrete and layered: (1) SPEC-PKV1.md, a versioned file-format spec with numbered sections for header layout, TOC entry structure, the signature block scope, path-normalization rules, entry-type flags including symlinks, codec ids (store/deflate/zstd), and the exact exception each violation must raise; (2) docs/INCIDENT-2043.md, a post-incident writeup with the malicious sample's TOC dump, the customer path that was overwritten, and three follow-up action items; (3) fixtures/incident_2043.pkg, the actual malicious bundle from the incident, plus fixtures/valid_config_v3.pkg and its expected-contents manifest so the agent can reproduce both the escape and a good extraction; (4) docs/CHANGELOG.md showing the format's version history so the reader/version checks have context. An engineer would read the incident, open the spec, and discover the code diverges from it in several places at once.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "pkgvault/format.py",
+    "purpose": "PKV1 constants (magic bytes, version, codec ids, entry-type flags), struct layouts for the header and TOC entries, and the pure path-normalization helper the spec defines in section 5. Pre-apply the normalization helper is lenient/absent so callers pass raw entry paths through.",
+    "approx_loc": 130
+   },
+   {
+    "path": "pkgvault/reader.py",
+    "purpose": "PkgReader: opens a .pkg, parses and validates the header, loads the TOC, and yields entry records (name, type flag, codec, offset, compressed_len, uncompressed_size, checksum). Pre-apply it trusts TOC offset/length fields and slices the file without bounds checks.",
+    "approx_loc": 185
+   },
+   {
+    "path": "pkgvault/extractor.py",
+    "purpose": "Extractor.extract_all(dest): the security-critical write path. Resolves each entry path under dest, handles regular files and symlink entries, orders checksum verification relative to writing. Pre-apply it os.path.joins raw names, follows symlink targets blindly, and writes before verifying.",
+    "approx_loc": 155
+   },
+   {
+    "path": "pkgvault/verify.py",
+    "purpose": "Signature and checksum verification: computes the HMAC-SHA256 signature over the spec-defined byte range and compares it to the bundle's signature block; computes per-entry SHA-256. Pre-apply it HMACs the wrong range (data only, not header+TOC), uses ==, and treats a missing signature block as trusted.",
+    "approx_loc": 100
+   },
+   {
+    "path": "pkgvault/compression.py",
+    "purpose": "Codec dispatch and bounded decompression for store/deflate(zlib)/zstd. Pre-apply it fully decompresses into memory with no cap and trusts the declared uncompressed_size (and the zstd frame content size) without enforcing it.",
+    "approx_loc": 95
+   },
+   {
+    "path": "pkgvault/errors.py",
+    "purpose": "Exception hierarchy rooted at PkgError with PkgFormatError, PkgSignatureError, PkgPathError, PkgSizeError, PkgChecksumError as the spec's public contract. Pre-apply a couple of these are missing or aliased to generic errors.",
+    "approx_loc": 40
+   },
+   {
+    "path": "pkgvault/writer.py",
+    "purpose": "PkgWriter that builds valid signed PKV1 bundles from a directory (used by tooling and to generate the good fixtures). Read-mostly for the task; establishes what a conformant bundle looks like.",
+    "approx_loc": 115
+   },
+   {
+    "path": "pkgvault/cli.py",
+    "purpose": "argparse CLI exposing `verify` and `extract` subcommands with a --strict flag; maps PkgError subclasses to distinct non-zero exit codes per the spec.",
+    "approx_loc": 90
+   },
+   {
+    "path": "pkgvault/__init__.py",
+    "purpose": "Public API surface: exports PkgReader, Extractor, verify_signature, the exception classes, and the STRICT default.",
+    "approx_loc": 20
+   },
+   {
+    "path": "tools/inspect_pkg.py",
+    "purpose": "Standalone diagnostic that dumps a bundle's header and TOC (name, type, codec, sizes, checksum) so the agent can inspect the incident sample and crafted inputs.",
+    "approx_loc": 70
+   }
+  ],
+  "data_files": [
+   {
+    "path": "SPEC-PKV1.md",
+    "description": "Authoritative PKV1 format spec: numbered sections for header layout, TOC entry fields, signature-block scope (header+TOC+data), path normalization rules (reject absolute, reject any '..' component, reject drive/UNC-like prefixes, collapse '.'), symlink containment rule, codec ids, declared-size and ratio limits, strict-mode unsigned rejection, and a table mapping each violation to its exception type and CLI exit code."
+   },
+   {
+    "path": "docs/INCIDENT-2043.md",
+    "description": "Post-incident report: symptom (file written to /etc on a customer appliance), the malicious bundle's TOC dump showing a '../../../etc/cron.d/x' entry and a symlink entry, root-cause hypothesis, and three action items (containment, size limits, signature scope)."
+   },
+   {
+    "path": "docs/CHANGELOG.md",
+    "description": "Format/library version history (v1..v3) explaining when the signature block and zstd codec were added; context for header/version validation."
+   },
+   {
+    "path": "fixtures/valid_config_v3.pkg",
+    "description": "A well-formed, correctly signed multi-entry bundle (nested directories, store + deflate + zstd entries)."
+   },
+   {
+    "path": "fixtures/valid_config_v3.manifest.json",
+    "description": "Expected relative paths, byte lengths, and SHA-256 of each file in the valid bundle, for round-trip checks by the agent."
+   },
+   {
+    "path": "fixtures/incident_2043.pkg",
+    "description": "The actual malicious bundle from the incident (path traversal + escaping symlink), for reproduction."
+   },
+   {
+    "path": "fixtures/signing_key.hex",
+    "description": "The 32-byte HMAC signing key (hex) shared by the spec, writer, and verifier so signatures are deterministic and offline."
+   }
+  ],
+  "pip_deps": [
+   "zstandard==0.22.0",
+   "pytest==8.2.0"
+  ]
+ },
+ "instruction_outline": "Explain that PkgVault ships signed PKV1 config bundles to appliances and that INCIDENT-2043 revealed the extractor writes attacker-controlled files outside the extraction root. Point the agent to SPEC-PKV1.md as the authoritative contract and to the incident report and the fixtures (valid bundle + manifest + malicious incident sample + signing key). State the goal: make PkgReader/Extractor/verify/compression fully conform to the spec's security rules so that (a) well-formed signed bundles still extract to byte-identical files at the spec-defined relative paths, and (b) any bundle that violates a spec rule is refused before any unsafe effect, raising the exception type the spec's violation table names (rooted at PkgError) and, from the CLI, the documented non-zero exit code. Enumerate the behavioral requirements at the level the spec states them (signature scope and strict-mode unsigned rejection; path normalization and traversal/symlink containment under dest; per-entry checksum must be verified before the entry is written; declared uncompressed size and max expansion ratio must be enforced during decompression for all codecs; TOC offsets/lengths must be validated against the file size; header magic/version must be validated). Tell the agent the exception classes and CLI exit codes in errors.py/cli.py are the public contract and must match the spec's table. Emphasize: no new dependencies beyond what is installed, no network, must remain deterministic. Do not reveal specific test bundles, assertion counts, or the reference diff.",
+ "required_changes": [
+  "Signature verification must cover the spec-defined byte range (header + TOC + data), not data only, so a tampered TOC is detected; comparison must use hmac.compare_digest; and in strict mode a bundle with a missing/empty signature block must be rejected with PkgSignatureError.",
+  "Path handling must implement SPEC section 5 normalization: reject absolute paths, reject any entry whose normalized path contains a '..' component or escapes dest, reject drive/UNC-like prefixes, and confirm the final resolved path stays under dest before any write, raising PkgPathError otherwise.",
+  "Symlink entries must be contained: a symlink whose target (resolved relative to its location) escapes dest must be refused with PkgPathError, and symlinks must never be followed during path resolution of other entries.",
+  "Per-entry SHA-256 must be verified against the TOC checksum before the entry's bytes are written to disk; on mismatch raise PkgChecksumError and ensure no partial/complete file for that entry is left behind.",
+  "Decompression must enforce the declared uncompressed_size and the spec's maximum expansion ratio for every codec (store/deflate/zstd), aborting with PkgSizeError once output would exceed the cap instead of buffering unbounded output or trusting the zstd frame content size.",
+  "The reader must validate that each TOC entry's offset and compressed length lie within the file and do not overlap the header/signature regions, raising PkgFormatError on out-of-range or truncated inputs instead of slicing or allocating blindly.",
+  "Header validation must enforce the PKV1 magic bytes and supported version range, raising PkgFormatError on mismatch; and the errors.py hierarchy plus cli.py exit-code mapping must match the spec's violation table."
+ ],
+ "solution_plan": [
+  {
+   "file": "pkgvault/verify.py",
+   "change": "Recompute the HMAC over header+TOC+data per the spec, switch to hmac.compare_digest, and add strict-mode rejection when the signature block is absent/empty; expose verify used by reader/extractor.",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "pkgvault/extractor.py",
+   "change": "Route every entry through the normalization helper and a resolved-under-dest check, implement symlink containment, and reorder logic so checksum verification happens before the write with cleanup on failure.",
+   "approx_loc_changed": 85
+  },
+  {
+   "file": "pkgvault/compression.py",
+   "change": "Replace one-shot decompress with bounded streaming for store/deflate/zstd that enforces declared size and ratio cap and raises PkgSizeError on overflow.",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "pkgvault/reader.py",
+   "change": "Add header magic/version validation and TOC offset/length bounds and overlap checks against file size, raising PkgFormatError.",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "pkgvault/format.py",
+   "change": "Implement the strict path-normalization helper (absolute/../drive/UNC/'.' rules) returning a safe relative path or signaling rejection.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "pkgvault/errors.py",
+   "change": "Add the missing exception subclasses and align the hierarchy with the spec's public contract.",
+   "approx_loc_changed": 12
+  },
+  {
+   "file": "pkgvault/cli.py",
+   "change": "Map each PkgError subclass to its documented non-zero exit code and wire the --strict flag through.",
+   "approx_loc_changed": 15
+  }
+ ],
+ "estimated_total_loc_changed": 225,
+ "test_strategy": {
+  "approach": "tests/test.sh installs the package and runs a hidden pytest suite that builds bundles at test time with an independent PKV1 builder (raw struct packing + hmac, not the app's writer), so the format is exercised as an external oracle derived from the spec rather than from the reference code. It drives the public API (PkgReader/Extractor/verify) and one end-to-end CLI invocation, asserting observable effects: files-on-disk (paths, bytes, SHA-256), that nothing is ever created outside the destination directory, process exit codes, and that refusals raise a PkgError subclass. Reward is written to /logs/verifier/reward.txt (1 all-pass, 0 otherwise).",
+  "invariants_checked": [
+   "A well-formed signed bundle extracts to exactly the manifest's relative paths with byte-identical contents and matching SHA-256.",
+   "For a bundle with a '..'/absolute/escaping-symlink entry, after extraction attempts no file or symlink exists anywhere outside dest (checked by scanning a sentinel tree around dest) and a PkgPathError-family error/nonzero exit results.",
+   "A bundle whose TOC is modified after signing is rejected (PkgSignatureError family), proving the HMAC scope includes the TOC.",
+   "An unsigned bundle is accepted in non-strict and rejected in strict mode.",
+   "A bundle declaring a small uncompressed_size but whose stream expands beyond the size/ratio cap is aborted with PkgSizeError and leaves no oversized output file; peak is bounded (test uses a modest cap so it stays fast/deterministic).",
+   "An entry whose stored bytes do not match the TOC checksum raises PkgChecksumError and leaves no file for that entry.",
+   "A truncated file / out-of-range TOC offset raises PkgFormatError rather than crashing or allocating unboundedly.",
+   "Bad magic or unsupported version raises PkgFormatError."
+  ],
+  "anti_overfit_measures": [
+   "Bundles are constructed by the test's own independent builder from the spec, not by the app's writer, so a fix that only special-cases the shipped fixtures fails.",
+   "Primary assertions are on observable filesystem state, bytes/hashes, and exit codes; exception checks accept any subclass of the spec-documented base classes (never a leaf class name or internal function/attribute).",
+   "Multiple distinct instances per vulnerability (e.g. absolute path, nested '..', escaping symlink; deflate and zstd bombs) so a narrow patch to one shape does not pass.",
+   "No assertion on constant-time comparison, HMAC call arrangement, or internal structure \u2014 only that tampered/unsigned inputs are accepted/rejected correctly.",
+   "Valid-extraction golden values come from the manifest computed independently, so an over-aggressive validator that also breaks good bundles fails."
+  ],
+  "pre_apply_failure_reason": "The shipped extractor writes the incident sample's '../../../etc/...' entry and its escaping symlink outside dest, and the verifier HMACs only the data range so a tampered-TOC bundle is accepted; the traversal-containment, symlink-containment, and TOC-tamper tests therefore fail (files appear outside dest / a malicious bundle is accepted), and the decompression-bomb and checksum tests also fail, yielding reward 0."
+ },
+ "difficulty_rationale": "The task presents six independent spec violations across five modules that interact through ordering guarantees the spec states but the code ignores (verify signature scope before trusting TOC; validate offsets before slicing; verify checksum before writing; enforce size during decompression). A mid-tier model typically patches the most visible symptom \u2014 it adds a basename or a simple '..' check to the extractor \u2014 and misses the HMAC-scope bug (which requires reading the spec's signature-scope section and the writer to see what range is actually signed), the zstd-frame-content-size trust in the bomb path, the symlink-target containment case, and the reader bounds checks; any one omission leaves a failing behavioral test. It must also keep good bundles extracting byte-for-byte, so over-broad rejection (e.g. banning all symlinks or clamping sizes too tightly) breaks the golden-extraction invariant. A frontier model can, in one session, read SPEC-PKV1.md and INCIDENT-2043.md, reproduce with the provided fixtures via tools/inspect_pkg.py, enumerate the violation table, and land a coherent cross-module fix \u2014 a real capability gap driven by breadth and subtle semantics, not by any single hard trick.",
+ "determinism_notes": "All inputs are byte-exact: fixtures are committed blobs and test-time bundles are built with fixed content, a fixed 32-byte HMAC key (fixtures/signing_key.hex), and deterministic codecs (store, zlib at a fixed level, zstd at a fixed level with fixed parameters). No wall-clock, no randomness, no network. zstd/zlib decompression is deterministic; the bomb test uses a modest declared cap so it terminates quickly regardless of host speed. Exception types and CLI exit codes are fixed by the spec. sha256 hashes in the manifest are precomputed offline. sqlite/external services are not used. Dependencies (zstandard, pytest) are pinned and installed at build time so runtime is fully offline.",
+ "risks": [
+  "zstandard must be a pip-installable manylinux wheel pinned in the Dockerfile so the runtime is offline and deterministic; if unavailable the codec set could be reduced to store+deflate, but then the 'zstd frame content size trust' vulnerability instance is lost \u2014 keep zstandard pinned to a known wheel version.",
+  "The decompression-bomb test must cap peak memory/output so it never actually materializes a huge file; use a small declared size and ratio cap and assert early abort, not a real multi-GB expansion.",
+  "Exception-type assertions must accept subclasses of the spec's documented base classes to avoid overfitting; leaf-class or attribute assertions must be prohibited in the suite.",
+  "The independent test builder must match the spec's byte layout exactly, or valid-extraction goldens will diverge from the app \u2014 the builder and SPEC section numbers must be cross-checked during authoring.",
+  "Symlink containment tests must run as a normal user and rely on os.symlink working in the container; verify the base image permits symlink creation in the temp extraction dir.",
+  "Must ensure the pre-apply extractor does not raise before writing (so the escape genuinely happens) to guarantee a real pre-apply failure signal rather than an incidental crash."
+ ]
+}

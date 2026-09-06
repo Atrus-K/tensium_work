@@ -1,0 +1,246 @@
+{
+ "name": "recon-nightly-timeout-2291",
+ "category": "Performance / algorithm optimization",
+ "title": "Nightly payment reconciliation job times out after tenant onboarding (INCIDENT-2291)",
+ "summary": "The codebase is `recon`, a small payments-reconciliation engine: it reads a bank statement CSV (German-format, semicolon-separated), loads a customer master CSV and an SQLite invoice ledger, matches each statement line to one or more open invoices by a documented rule set (exact reference, fuzzy reference, IBAN+amount, customer+amount+date window, and oldest-first batch payments), persists match results back to SQLite and writes matches/unmatched/summary reports. After tenant \"Nordwind\" was onboarded (12,000 statement lines, 40,000 open invoices, 3,000 customers) the nightly job stopped finishing inside its 2-hour window, and an earlier hotfix (capping batch-payment subset search at 12 invoices) silently leaves large customers' batch payments unmatched. The workspace contains the incident ticket, the nightly log with stage timings, a cProfile dump from a 200-line sample, the PR review thread of the hotfix, and the matching-rules spec. The agent must diagnose the root causes across the candidate search, fuzzy matcher, SQLite repository/schema, customer-master loader, pipeline orchestration and batch matcher, make the full run complete within the budget on the shipped fixture while producing exactly the matches the spec dictates, and restore correct batch matching for customers with more than 12 open invoices.",
+ "real_world_grounding": "Payment reconciliation engines (matching bank statement lines to open receivables) are standard back-office software, and their classic failure mode is exactly this: a matcher that was O(lines x invoices) with per-row SQL round-trips works fine for a small tenant and collapses when a large one is onboarded, while an emergency cap added under incident pressure quietly degrades matching quality. Evidence trail shipped in the workspace: (1) docs/INCIDENT-2291.md - ticket: nightly recon for tenant Nordwind killed at the 2h watchdog three nights running; ops note that a 200-line sample took 14 min; acceptance criteria written by the finance lead (\"full Nordwind August statement must finish in under a minute on the batch box; no regression in matched lines; the 17 batch payments from Nordwind's key accounts must match\"). (2) logs/recon_nightly_2026-08-31.log - stage timing lines from pipeline/run.py showing `stage=candidates` never completing, plus repeated `sqlite3 connect` debug lines and `WARN batch: candidate set 38 > 12, skipping (PR-418 cap)` warnings. (3) profiles/recon_sample200.cprofile.txt - a cProfile `sort=cumulative` listing (top 25) where `repository.get_invoice`, `sqlite3.connect`, `fuzzy.levenshtein`, `master.load_customers` and `normalize.normalize_reference` dominate. (4) docs/pr-418-review.md - the review thread of the hotfix that added the 12-invoice cap; the reviewer objects that rule B3 in the spec is defined over contiguous oldest-first runs, not arbitrary subsets, so the cap is the wrong fix and drops legitimate matches; the author replies \"agreed, follow-up ticket\" (never done). (5) docs/matching_rules.md - the matching spec (rules A1, A2, B1, B2, B3, normalization rules, tie-break order, one-invoice-one-match, processing order). (6) recon/store/schema.sql showing the missing indexes and a comment `-- TODO(perf): reference lookups are non-sargable`. The agent must connect these to find five independent root causes.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "recon/cli.py",
+    "purpose": "argparse entrypoint: `python -m recon.cli run --db data/recon.db --statement <csv> --customers data/customers.csv --out <dir>`; exit codes; wires config",
+    "approx_loc": 60
+   },
+   {
+    "path": "recon/config.py",
+    "purpose": "Dataclass of thresholds: amount tolerance (0.01), fuzzy max edit distance (2), B2 date window (14 days), B3 batch window (60 days) and max run length (40), the PR-418 `BATCH_SUBSET_CAP = 12` hotfix constant",
+    "approx_loc": 40
+   },
+   {
+    "path": "recon/pipeline/run.py",
+    "purpose": "Orchestrates stages parse -> candidates -> score -> decide -> persist -> report, logs `stage=<name> elapsed=<s>` per stage; currently reloads the customer master inside the per-line loop and writes each match with its own commit",
+    "approx_loc": 120
+   },
+   {
+    "path": "recon/pipeline/stages.py",
+    "purpose": "Per-line processing functions, ordering of statement lines (booking_date, then line_id), tracking of already-consumed invoice ids",
+    "approx_loc": 80
+   },
+   {
+    "path": "recon/statements/parser.py",
+    "purpose": "Parses semicolon-separated bank statement CSV with German decimals (1.234,56), DD.MM.YYYY dates, IBAN, remitter name, purpose text; yields StatementLine records",
+    "approx_loc": 90
+   },
+   {
+    "path": "recon/customers/master.py",
+    "purpose": "Loads customers.csv (id, legal name, aliases pipe-separated, IBANs pipe-separated) and builds IBAN->customer and normalized-alias->customer lookups; currently rebuilt on every call",
+    "approx_loc": 70
+   },
+   {
+    "path": "recon/matching/normalize.py",
+    "purpose": "normalize_reference(): uppercase, strip whitespace/hyphens/slashes, transliterate umlauts (AE/OE/UE/SS), strip leading zeros in numeric groups; extract_reference_tokens() from purpose text; regexes compiled inside the functions",
+    "approx_loc": 60
+   },
+   {
+    "path": "recon/matching/fuzzy.py",
+    "purpose": "Full-matrix Levenshtein distance, no length pre-filter, no early exit; called for every (line token, candidate reference) pair",
+    "approx_loc": 50
+   },
+   {
+    "path": "recon/matching/candidates.py",
+    "purpose": "Rules A1 exact normalized reference, A2 fuzzy reference (distance <= 2 and exact amount), B1 IBAN+amount, B2 customer+amount+date window; currently iterates repo.all_open_invoice_ids() and calls repo.get_invoice(id) per id for every statement line",
+    "approx_loc": 120
+   },
+   {
+    "path": "recon/matching/batch.py",
+    "purpose": "Rule B3 batch payments: currently itertools.combinations over all subsets of a customer's open invoices, skipped when count > BATCH_SUBSET_CAP",
+    "approx_loc": 80
+   },
+   {
+    "path": "recon/matching/scoring.py",
+    "purpose": "Ranks candidates by rule priority then tie-breaks (earliest due date, lowest invoice id) per spec section 5",
+    "approx_loc": 70
+   },
+   {
+    "path": "recon/matching/decision.py",
+    "purpose": "Chooses a single match per line, records rule label and unmatched reason codes (NO_CANDIDATE, AMBIGUOUS, INVOICE_CONSUMED)",
+    "approx_loc": 60
+   },
+   {
+    "path": "recon/store/repository.py",
+    "purpose": "SQLite access: opens a new connection per call, get_invoice(id), all_open_invoice_ids(), open_invoices_for_customer(cid) (no index), invoice_by_reference(ref) using non-sargable `lower(replace(reference,'-',''))` that only partially mirrors normalize_reference, mark_matched() committing per row",
+    "approx_loc": 150
+   },
+   {
+    "path": "recon/store/migrations.py",
+    "purpose": "Applies schema.sql and versioned migrations to the DB on startup; schema_version table",
+    "approx_loc": 40
+   },
+   {
+    "path": "recon/store/schema.sql",
+    "purpose": "customers, invoices(id, customer_id, reference, amount_cents, currency, due_date, status), bank_lines, match_results tables; no secondary indexes; TODO(perf) comment",
+    "approx_loc": 40
+   },
+   {
+    "path": "recon/reporting/writer.py",
+    "purpose": "Writes matches.csv (line_id, invoice_ids, rule, amount), unmatched.csv (line_id, reason), summary.json (counts per rule, unmatched count, total matched amount)",
+    "approx_loc": 80
+   },
+   {
+    "path": "recon/models.py",
+    "purpose": "Dataclasses StatementLine, Invoice, Customer, MatchResult",
+    "approx_loc": 60
+   },
+   {
+    "path": "tests_unit/test_normalize.py, tests_unit/test_parser.py, tests_unit/test_batch_small.py",
+    "purpose": "Existing visible unit tests (all pass pre-change) covering normalization rules, parser edge cases and B3 on a 5-invoice toy customer; realistic team test suite the agent can extend",
+    "approx_loc": 120
+   }
+  ],
+  "data_files": [
+   {
+    "path": "data/recon.db",
+    "description": "SQLite ledger: 3,000 customers, 40,000 invoices (approx 34,000 open, 6,000 paid), empty match_results; references like `RE-2026-004471/KD-01188` with realistic variation in formatting"
+   },
+   {
+    "path": "data/customers.csv",
+    "description": "Customer master with 3,000 rows: customer_id, legal_name, aliases (pipe-separated, includes umlaut and abbreviation variants), ibans (pipe-separated, 1-3 per customer)"
+   },
+   {
+    "path": "data/statements/nordwind_2026-08.csv",
+    "description": "Bank statement, 12,000 lines, semicolon-separated, German decimals and dates; approx 55% exact-reference lines, 15% mangled references (spaces, dropped hyphens, leading zeros, 1-2 typos), 10% IBAN+amount only, 5% customer+amount+date-window only, 3% batch payments (17 of them from customers with 13-38 open invoices), 12% unmatchable noise (fees, unknown remitters, amounts matching nothing)"
+   },
+   {
+    "path": "data/statements/sample_200.csv",
+    "description": "The 200-line sample referenced in the incident and profile, first 200 lines of the full statement"
+   },
+   {
+    "path": "docs/matching_rules.md",
+    "description": "Matching spec: normalization rules, rules A1/A2/B1/B2/B3 with priorities, B3 defined as contiguous run in oldest-first due-date order within 60 days and at most 40 invoices, tie-break order, one-invoice-one-match, processing order"
+   },
+   {
+    "path": "docs/INCIDENT-2291.md",
+    "description": "Incident ticket with timeline, watchdog kills, sample timing, finance-lead acceptance criteria"
+   },
+   {
+    "path": "docs/pr-418-review.md",
+    "description": "Review thread of the hotfix that added the 12-invoice cap, reviewer pointing at rule B3"
+   },
+   {
+    "path": "logs/recon_nightly_2026-08-31.log",
+    "description": "Nightly job log with stage timings, connect debug lines, batch cap warnings, watchdog termination"
+   },
+   {
+    "path": "profiles/recon_sample200.cprofile.txt",
+    "description": "cProfile cumulative listing (top 25) of the 200-line sample run"
+   },
+   {
+    "path": "README.md",
+    "description": "How to run the CLI, output file contract, how to run unit tests"
+   }
+  ],
+  "pip_deps": [
+   "pytest"
+  ]
+ },
+ "instruction_outline": "You are on the payments team. Read docs/INCIDENT-2291.md: the nightly reconciliation run for tenant Nordwind (data/statements/nordwind_2026-08.csv against data/recon.db and data/customers.csv) no longer completes and is killed by the 2-hour watchdog; the log, a cProfile dump of a 200-line sample and the review thread of hotfix PR-418 are in logs/, profiles/ and docs/. Fix the root causes so that `python -m recon.cli run --db data/recon.db --statement data/statements/nordwind_2026-08.csv --customers data/customers.csv --out <dir>` completes the full statement well under one minute on a 2-CPU box, with the CLI, output file layout (matches.csv, unmatched.csv, summary.json) and DB persistence contract described in README.md unchanged. Matching behaviour must follow docs/matching_rules.md exactly, including tie-breaks and the one-invoice-one-match rule; in particular rule B3 (batch payments) must work for customers with more than 12 open invoices, as the PR-418 review demanded, and no line that matched before may stop matching or change its match. The database schema may be extended via recon/store/migrations.py as long as an existing data/recon.db is migrated automatically on startup and re-running on an already-migrated DB is a no-op. Do not add third-party dependencies (no network is available). Existing unit tests in tests_unit/ must keep passing; you are encouraged to add your own. Explain the root causes you found in a short CHANGES.md.",
+ "required_changes": [
+  "Candidate search (recon/matching/candidates.py) must stop scanning every open invoice per statement line with a per-id SQL fetch; build per-run indexes (normalized reference -> invoices, customer -> open invoices, (customer, amount_cents) -> invoices, IBAN -> customer) so that A1/A2/B1/B2 lookups are near-constant per line while preserving spec tie-break order (rule priority, earliest due date, lowest invoice id).",
+  "Fuzzy matching (recon/matching/fuzzy.py, recon/matching/normalize.py) must not run a full O(len^2) Levenshtein against every invoice of a customer for every token: apply a length-difference pre-filter and early-exit/banded distance bounded by the configured threshold, hoist regex compilation and translation tables to module level; results (which candidates are within distance 2) must be unchanged.",
+  "SQLite repository (recon/store/repository.py) must use one long-lived connection per run, bulk-load open invoices once, use a sargable indexed lookup on a stored normalized reference column that applies the SAME normalization as normalize_reference (the current SQL mirror `lower(replace(reference,'-',''))` is incomplete), and persist match results with executemany/single commit instead of one commit per line.",
+  "Schema/migrations (recon/store/schema.sql, recon/store/migrations.py) must add the reference_norm column and indexes on invoices(customer_id, status) and invoices(reference_norm), backfill existing rows using the Python normalizer, bump schema_version, and be idempotent on re-run.",
+  "Batch matching (recon/matching/batch.py, recon/config.py) must implement rule B3 as specified: contiguous runs of the customer's open invoices in oldest-first due-date order (then invoice id), all within 60 days of the run's oldest due date, at most 40 invoices, sum equal to the payment amount within tolerance, preferring the run with the earliest start (then shortest); remove the PR-418 subset cap and the exponential itertools.combinations search.",
+  "Pipeline (recon/pipeline/run.py, recon/customers/master.py) must load and index the customer master exactly once per run instead of once per statement line, pass the prebuilt indexes into the stages, and keep the stage-timing log lines and output files unchanged.",
+  "End-to-end result: full Nordwind statement completes within the time budget, every line's match (invoice set and rule label) equals the spec-derived ground truth including all 17 large-customer batch payments, unmatched lines stay unmatched, DB match_results/invoice status reflect the report, and output is identical across repeated runs."
+ ],
+ "solution_plan": [
+  {
+   "file": "recon/matching/candidates.py",
+   "change": "Introduce InvoiceIndex built once from repo.load_open_invoices(): dicts by normalized reference, by customer id (sorted by due_date, id), by (customer, amount_cents); rewrite rules A1/A2/B1/B2 to consult the index; A2 restricted to the shortlist of same-customer references passing the length filter; keep deterministic ordering",
+   "approx_loc_changed": 65
+  },
+  {
+   "file": "recon/matching/fuzzy.py",
+   "change": "Replace full-matrix Levenshtein with bounded distance (return threshold+1 early when |len diff| > k or when the row minimum exceeds k), two-row DP; add within_distance(a, b, k) helper",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "recon/matching/normalize.py",
+   "change": "Hoist compiled regexes and str.maketrans table to module scope; add lru_cache on normalize_reference; expose the single normalizer used by both matcher and migration backfill",
+   "approx_loc_changed": 15
+  },
+  {
+   "file": "recon/store/repository.py",
+   "change": "Hold one connection for the Repository lifetime (context manager), PRAGMA journal_mode=WAL/synchronous=NORMAL, load_open_invoices() bulk fetch, invoices_by_reference_norm(norm) indexed query, mark_matched_bulk(results) with executemany and one commit, remove per-call connect and per-row commit",
+   "approx_loc_changed": 70
+  },
+  {
+   "file": "recon/store/schema.sql",
+   "change": "Add reference_norm column to invoices and CREATE INDEX IF NOT EXISTS for invoices(customer_id, status), invoices(reference_norm), match_results(line_id)",
+   "approx_loc_changed": 8
+  },
+  {
+   "file": "recon/store/migrations.py",
+   "change": "Add migration v2: ALTER TABLE add reference_norm if absent, backfill via normalize_reference in one executemany, create indexes, bump schema_version; idempotent check via PRAGMA table_info",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "recon/matching/batch.py",
+   "change": "Replace combinations()+cap with oldest-first ordering and prefix-sum contiguous-run scan bounded by window days and max run length; return earliest-start then shortest run; drop BATCH_SUBSET_CAP usage",
+   "approx_loc_changed": 50
+  },
+  {
+   "file": "recon/config.py",
+   "change": "Remove BATCH_SUBSET_CAP, add BATCH_WINDOW_DAYS=60 and BATCH_MAX_RUN=40 already referenced by spec",
+   "approx_loc_changed": 6
+  },
+  {
+   "file": "recon/pipeline/run.py",
+   "change": "Load customer master and build InvoiceIndex once before the loop, pass them to stages, collect MatchResults and persist in one bulk call at the end, keep stage timing logs",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "recon/customers/master.py",
+   "change": "Build alias and IBAN lookup dicts once in a CustomerIndex class instead of re-reading the CSV in lookup functions",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "CHANGES.md",
+   "change": "Root-cause write-up (5 causes) and migration note",
+   "approx_loc_changed": 20
+  }
+ ],
+ "estimated_total_loc_changed": 340,
+ "test_strategy": {
+  "approach": "tests/test.sh runs hidden pytest tests (pytest pre-baked in the image) that copy the pristine fixtures to a scratch dir and exercise ONLY the documented CLI (`python -m recon.cli run ...`), the produced report files, and the SQLite state. (1) Full-statement run via subprocess with a hard 120s timeout, asserting exit 0 and elapsed <= 60s (reference solution runs in roughly 4-8s on 2 CPUs; original never finishes). (2) matches.csv compared row-by-row against a hidden ground-truth JSON produced by the fixture generator (which knows by construction which invoice(s) each synthetic statement line pays and which rule applies), covering exact, mangled, IBAN, date-window, and the 17 large-customer batch payments; unmatched.csv must contain exactly the noise lines. (3) DB state: match_results rows equal matches.csv, matched invoices have status 'paid', no invoice appears in two matches. (4) A second hidden statement (1,500 lines, different seed, same DB) with its own ground truth checks generalization; the pipeline is also run twice in a row asserting byte-identical reports and that startup on the already-migrated DB succeeds (migration idempotence). (5) A machine-independent efficiency check: the pipeline is launched with PYTHONPATH pointing at a test-only sitecustomize.py that wraps sqlite3.connect and installs set_trace_callback to count executed statements into a file; total statements for the 12,000-line run must be <= 60,000 (original executes hundreds of millions; any sane batched or per-line design lands well under 40,000). (6) Existing tests_unit/ still pass.",
+  "invariants_checked": [
+   "Full 12,000-line run exits 0 within 60s (headroom ~8-15x over the reference; original exceeds 2h)",
+   "For every statement line the matched invoice id set and rule label equal the generator-derived ground truth; noise lines are unmatched with a valid reason code",
+   "All 17 batch payments from customers with >12 open invoices are matched to the correct contiguous oldest-first run",
+   "No invoice id appears in more than one match; matched invoices have status 'paid' in the DB; match_results table mirrors matches.csv",
+   "summary.json counts equal the row counts in matches.csv/unmatched.csv and total matched amount equals the sum of matched line amounts",
+   "Second hidden statement with a different seed produces its ground truth; repeated runs produce byte-identical reports; startup on an already-migrated DB succeeds",
+   "Total SQLite statements executed during the full run <= 60,000",
+   "Visible unit tests in tests_unit/ continue to pass"
+  ],
+  "anti_overfit_measures": [
+   "Tests touch only the documented CLI, output files and DB tables; no internal function or class names are imported (an agent may restructure modules freely, e.g. index in SQL instead of Python dicts, or use a different bounded edit-distance algorithm)",
+   "Ground truth comes from the fixture generator (an independent oracle by construction, validated against the spec and the original slow code on non-batch lines), not from the reference implementation's output",
+   "A second hidden statement with a different seed prevents hardcoding or tuning to the shipped file",
+   "Timing budget has 8-15x headroom over the reference, so any reasonable optimized design passes; the SQL statement budget (60,000) is generous enough for per-line query designs and only rules out N+1-per-candidate patterns",
+   "Schema extensions are permitted in any form (new columns, tables, or none at all) - tests only check the original tables' documented columns and that a second startup on the migrated DB works",
+   "Byte-identical repeated output is required by the spec's deterministic tie-breaks, not by the reference's incidental ordering; CSV row order is normalized by line_id before comparison"
+  ],
+  "pre_apply_failure_reason": "Pre-apply, the full-statement subprocess is killed by the 120s test timeout (original needs hours because every line scans 34,000 open invoices with one SQLite connection+query per invoice, reloads the customer CSV, and runs full Levenshtein against all customer references), so the timing, ground-truth comparison, DB-state and statement-count tests all fail; independently, the 17 large-customer batch payments are unmatched because of the PR-418 cap, so even a hypothetical fast run would fail the ground-truth and batch tests."
+ },
+ "difficulty_rationale": "A mid-tier model typically reads the cProfile top entry, optimizes Levenshtein or adds an lru_cache, maybe removes the 12-invoice cap (reintroducing the exponential hang), and stops; the time budget is sized so that ANY single unfixed root cause (per-line invoice scan with per-id SQL, unbounded Levenshtein over all customer invoices, non-sargable reference query plus missing index, per-line customer CSV reload, per-row commits) alone exceeds the 60s budget by a factor of 3 or more, so partial fixes fail. Correctness traps require connecting several files: the SQL normalization mirror is subtly different from the Python normalizer, so moving lookups into SQL (or a stored column) without unifying them changes matches; moving from a full scan to dict indexes silently changes tie-break order unless the spec's ordering is re-imposed; rule B3 must be re-read from the spec and the PR review (contiguous oldest-first runs) rather than just 'removing the cap'; and the one-invoice-one-match rule interacts with processing order so consumed invoices must be removed from the indexes. A frontier model can do all of this in one session: the evidence trail names every hotspot, the spec is complete and unambiguous, the data is local, and each fix is a well-known engineering pattern (index once, bounded edit distance, bulk SQL, prefix sums).",
+ "determinism_notes": "All fixtures are generated offline with fixed seeds and shipped as static files; the pipeline has no randomness and uses the clock only for stage-timing log lines (not part of the output). Tie-breaks are fully specified so output is unique. The wall-clock assertion uses generous headroom (reference ~4-8s vs 60s budget, original >2h) and is paired with a machine-independent SQL statement count so verdicts do not hinge on host speed; the pre-apply run is bounded by a subprocess timeout so the verifier fails fast instead of running for hours. The reference solution uses WAL/synchronous=NORMAL to avoid fsync-dominated timing variance. task.toml resources: 2 CPUs, 2 GB RAM, 15-minute timeout.",
+ "risks": [
+  "Pure-Python timing estimates for each root cause must be calibrated by the implementer so that every single unfixed cause exceeds the 60s budget by >=3x while the reference stays <=10s; fixture sizes (12k lines, 40k invoices, 3k customers, 35-char references) may need adjustment",
+  "A very slow verifier host could push a correct solution past 60s; mitigated by headroom and the statement-count metric, but the budget should be validated on the target Harbor runner",
+  "The sitecustomize-based SQL statement counter must handle solutions that import sqlite3 differently (e.g. `from sqlite3 import connect`) - patching at interpreter startup before any recon import handles this; no alternative driver is installable offline",
+  "Ground truth must be validated against the ORIGINAL implementation on the non-batch lines (they should agree) to ensure spec, generator and legacy code are consistent; any disagreement must be resolved in the spec before shipping",
+  "The agent may change the CLI or output columns; the instruction pins the contract and README documents it, tests read only documented files",
+  "The visible tests_unit/test_batch_small.py must pass under both the subset-based and the contiguous-run implementation, so its toy case must be one where both agree (5 invoices, payment equals the two oldest)"
+ ]
+}

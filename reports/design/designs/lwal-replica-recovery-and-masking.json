@@ -1,0 +1,281 @@
+{
+ "name": "lwal-replica-recovery-and-masking",
+ "category": "Data / database migration and recovery: online switchover, WAL recovery, data masking, graph queries",
+ "title": "LWAL 2.1 replica recovery and staging data masking",
+ "summary": "The workspace is `ledgerwal`, the Python replica-side tooling for a small accounts ledger whose Go primary (`ledgerd`, not included) ships a SQLite snapshot plus a custom append-only binary write-ahead log (\"LWAL\"). The tooling has three jobs: `recover` (rebuild a replica DB from snapshot + WAL segments), `mask` (produce a de-identified copy of a replica for staging under an internal data-protection standard), and `verify` (compare primary vs replica and report LSN lag for a switchover). The primary was upgraded to LWAL 2.1 (compressed payloads, partial-update records, checkpoint records, snapshot metadata listing in-flight transactions) but the Python decoder still implements 2.0 semantics with several latent bugs, and a failover drill produced a replica with phantom aborted transfers, wiped address columns, and a crash on a compressed record; separately an audit found the staging masking was non-deterministic, broke cross-table joins, exposed IBAN bodies and exact birth dates. The agent must read the two specification documents and the incident/ticket records in `docs/` and bring `wal/`, `recovery/`, `masking/` and the CLI into conformance so that the provided fixtures recover to the correct state, corruption and gaps are rejected with the documented exit codes, and masking is deterministic, key-dependent, format-preserving and referentially consistent exactly as the policy spec prescribes.",
+ "real_world_grounding": "This mirrors the very common situation where a primary service's log format advances and the downstream replica/recovery tooling written by another team lags behind, surfacing as a failed failover drill rather than a unit-test failure. The evidence trail in the workspace: (1) `docs/specs/LWAL-2.1.md` - an RFC-style format and recovery-semantics spec (segment header, record framing, CRC, flag bits, payload encodings, torn-tail vs corruption rules, redo-from-oldest-active-transaction rule, required `_lwal_meta` fields) with a 2.0->2.1 change log; (2) `docs/specs/MASKING-POLICY-v3.md` - the de-identification standard (DPS-7 section 4) that mandates exact HMAC-SHA256 token derivations so masked datasets produced by different tools are join-compatible, DOB generalization with a 90+ bucket, format-preserving IBAN tokenization with recomputed mod-97 check digits, free-text redaction of emails and Luhn-valid PANs, shared token domains for referential consistency; (3) `docs/incidents/INC-2291-replica-rebuild.md` - a postmortem from the failover drill listing observed symptoms (aborted transfer TX-17xx visible on replica, customer 1043 address columns NULLed, UnicodeDecodeError at segment 6 offset, balances off by exact amounts) and action items; (4) `docs/tickets/DATA-418-staging-masking-audit.md` - audit findings with concrete examples (same customer got two different pseudonyms in two runs; `accounts.external_customer_ref` no longer joins to `customers.external_ref`; IBAN middle replaced by literal X's; DOBs unchanged; audit_log table shipped to staging); (5) `CHANGELOG.md` noting ledgerd moved to LWAL 2.1 on 2026-07-14 with \"python tooling: TODO\"; (6) `config/masking_policy.toml` and `keys/mask.key` as the operational config; (7) binary WAL segments and a SQLite snapshot under `fixtures/` produced by the primary, including a torn tail from the actual crash, plus corrupt/gap variants captured for regression.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "ledgerwal/__init__.py",
+    "purpose": "package version string",
+    "approx_loc": 5
+   },
+   {
+    "path": "ledgerwal/__main__.py",
+    "purpose": "delegates to cli.main so `python -m ledgerwal` works",
+    "approx_loc": 6
+   },
+   {
+    "path": "ledgerwal/cli.py",
+    "purpose": "argparse CLI with subcommands recover/mask/verify/inspect; documents exit-code contract (0 ok, 2 corrupt log, 3 missing segment, 4 policy error, 1 other); currently lets exceptions propagate as tracebacks and leaves partial output files behind",
+    "approx_loc": 120
+   },
+   {
+    "path": "ledgerwal/errors.py",
+    "purpose": "CorruptSegmentError, TornRecordError, MissingSegmentError, PolicyError, RecoveryError hierarchy",
+    "approx_loc": 30
+   },
+   {
+    "path": "ledgerwal/lsn.py",
+    "purpose": "LSN formatting/parsing helpers, segment filename <-> segment id",
+    "approx_loc": 35
+   },
+   {
+    "path": "ledgerwal/schema.py",
+    "purpose": "DDL for customers, accounts, transfers, audit_log, _lwal_meta (key/value); helpers to read/write meta",
+    "approx_loc": 70
+   },
+   {
+    "path": "ledgerwal/wal/__init__.py",
+    "purpose": "package marker",
+    "approx_loc": 2
+   },
+   {
+    "path": "ledgerwal/wal/framing.py",
+    "purpose": "parses the 32-byte segment header and iterates raw records (length/type/flags/lsn/txid/payload/crc32); defective: treats any short read or CRC mismatch as silent end-of-log, ignores segment_id/version validation, no zero-header end-of-data handling",
+    "approx_loc": 140
+   },
+   {
+    "path": "ledgerwal/wal/records.py",
+    "purpose": "decodes record payloads into dataclasses (Begin, RowChange(insert/update/delete with typed column values), Commit, Abort, Checkpoint); defective: ignores flag bits (COMPRESSED, PARTIAL), raises on CHECKPOINT type, value type tags for null/int64/text/bytes",
+    "approx_loc": 170
+   },
+   {
+    "path": "ledgerwal/wal/segments.py",
+    "purpose": "discovers *.lwal files in a directory, orders by segment id, yields (path, header); defective: no contiguity check of segment ids or first_lsn chaining",
+    "approx_loc": 70
+   },
+   {
+    "path": "ledgerwal/recovery/__init__.py",
+    "purpose": "package marker",
+    "approx_loc": 2
+   },
+   {
+    "path": "ledgerwal/recovery/snapshot.py",
+    "purpose": "copies snapshot DB to output path and reads _lwal_meta; defective: only reads snapshot_lsn, ignores open_txids and recovery_start_lsn",
+    "approx_loc": 60
+   },
+   {
+    "path": "ledgerwal/recovery/replay.py",
+    "purpose": "drives segment iteration and applies records to the output DB; defective: applies row changes immediately as read (aborted/uncommitted leak), filters purely by lsn > snapshot_lsn, no LSN monotonicity check, never writes applied_lsn/last_checkpoint_lsn or clears open_txids",
+    "approx_loc": 160
+   },
+   {
+    "path": "ledgerwal/recovery/apply_sql.py",
+    "purpose": "translates RowChange into parameterized INSERT/UPDATE/DELETE against sqlite; defective: UPDATE always sets every non-key schema column, NULLing columns absent from the record",
+    "approx_loc": 80
+   },
+   {
+    "path": "ledgerwal/masking/__init__.py",
+    "purpose": "package marker",
+    "approx_loc": 2
+   },
+   {
+    "path": "ledgerwal/masking/policy.py",
+    "purpose": "loads config/masking_policy.toml (tomllib) into Rule objects (table, column, kind, options); missing as_of_date, token_domain, drop_table support",
+    "approx_loc": 85
+   },
+   {
+    "path": "ledgerwal/masking/transforms.py",
+    "purpose": "transform functions: tokenize_email, pseudonym_name, mask_iban, null_out, redact_free_text; defective: name uses unseeded random.Random, email does not normalize case and replaces domain, iban writes X's, no generalize_dob, redact handles emails only",
+    "approx_loc": 150
+   },
+   {
+    "path": "ledgerwal/masking/exporter.py",
+    "purpose": "copies source DB, applies rules table by table, writes meta; defective: derives token salt from f'{table}.{column}' breaking shared token domains, does not drop tables, does not write masked/mask_policy_version meta",
+    "approx_loc": 105
+   },
+   {
+    "path": "ledgerwal/switchover/__init__.py",
+    "purpose": "package marker",
+    "approx_loc": 2
+   },
+   {
+    "path": "ledgerwal/switchover/verify.py",
+    "purpose": "compares two DBs: per-table row counts and content digests, reads applied_lsn from both metas and reports lag as JSON; correct, but depends on meta fields recovery currently never writes",
+    "approx_loc": 95
+   },
+   {
+    "path": "checks/smoke_recover.py",
+    "purpose": "visible developer smoke script: recovers the fixture and prints table row counts and applied_lsn (no assertions on hidden expectations)",
+    "approx_loc": 40
+   },
+   {
+    "path": "README.md",
+    "purpose": "usage of the three subcommands, exit-code contract, layout of fixtures, pointer to specs",
+    "approx_loc": 90
+   }
+  ],
+  "data_files": [
+   {
+    "path": "docs/specs/LWAL-2.1.md",
+    "description": "RFC-style spec: segment header layout (magic 'LWAL', version u16=2, flags, segment_id u64, first_lsn u64, created_epoch u64), record framing (u32 len, u8 type, u8 flags, u16 reserved, u64 lsn, u64 txid, payload, u32 crc32 over type..payload), record types 0x01 BEGIN..0x07 CHECKPOINT, flag bits COMPRESSED(0x01, zlib payload) and PARTIAL(0x02, update carries only changed columns), payload encodings with value type tags, zero-header end-of-data for preallocated segments, torn-tail rule (allowed only in the highest segment; elsewhere corruption), CRC mismatch always corruption, strict LSN monotonicity, segment contiguity (segment_id N+1, first_lsn = prev last lsn + 1), recovery algorithm (start at recovery_start_lsn, skip lsn <= snapshot_lsn unless txid in open_txids, buffer per txid, apply atomically on COMMIT, discard on ABORT or end of log), required _lwal_meta outputs (applied_lsn, last_checkpoint_lsn, open_txids='[]'), 2.0->2.1 changes section"
+   },
+   {
+    "path": "docs/specs/MASKING-POLICY-v3.md",
+    "description": "DPS-7 section 4 de-identification standard: exact token derivations (HMAC-SHA256 over key file bytes; token(domain, value) = hex of HMAC(key, domain + ':' + normalized value)), email rule (lowercase+strip, local part = first 12 hex chars, domain preserved), name rule (given/surname index = int(HMAC(key,'name:'+row id)) mod list length from data/masking lists), IBAN rule (keep country code and last 4, replace body with digits derived from HMAC digest, recompute check digits via ISO 7064 mod-97), DOB rule (YYYY-01-01; if age as of policy as_of_date > 89 use (as_of_year-90)-01-01), free-text redaction ([EMAIL], [PAN] for Luhn-valid 13-19 digit runs with optional spaces/dashes, non-Luhn digit runs untouched), shared token domains for referential consistency, drop_table rule, required meta fields masked='1' and mask_policy_version"
+   },
+   {
+    "path": "docs/incidents/INC-2291-replica-rebuild.md",
+    "description": "postmortem of the failover drill: timeline, observed symptoms with concrete row ids and amounts, stack trace excerpt (UnicodeDecodeError in records.py at segment 6), action items"
+   },
+   {
+    "path": "docs/tickets/DATA-418-staging-masking-audit.md",
+    "description": "audit ticket with reproduction notes and quoted policy clauses violated"
+   },
+   {
+    "path": "CHANGELOG.md",
+    "description": "release notes noting ledgerd LWAL 2.1 cutover date and pending python tooling work"
+   },
+   {
+    "path": "config/masking_policy.toml",
+    "description": "policy version 3, as_of_date = 2026-09-01, per-column rules incl. token_domain='customer_ref' shared by customers.external_ref and accounts.external_customer_ref, drop_table audit_log"
+   },
+   {
+    "path": "keys/mask.key",
+    "description": "64 hex chars fixture masking key"
+   },
+   {
+    "path": "data/masking/given_names.txt",
+    "description": "200 given names, one per line"
+   },
+   {
+    "path": "data/masking/surnames.txt",
+    "description": "200 surnames, one per line"
+   },
+   {
+    "path": "fixtures/primary/snapshot_lsn200.db",
+    "description": "SQLite snapshot: ~60 customers, ~90 accounts, ~250 transfers, audit_log rows; _lwal_meta snapshot_lsn=200, open_txids='[17]', recovery_start_lsn=193"
+   },
+   {
+    "path": "fixtures/primary/wal/000000000003.lwal ... 000000000006.lwal",
+    "description": "four 64KiB preallocated binary segments covering LSN 150-338: txn 17 spanning the snapshot boundary, an aborted txn, a txn spanning segments 4/5, COMPRESSED records, PARTIAL updates to customers.address_line1/city, DELETE then re-INSERT of the same account key inside one txn, a CHECKPOINT record at LSN 301, a trailing txn without COMMIT, torn tail (record cut mid-payload followed by zero fill) in segment 6"
+   },
+   {
+    "path": "fixtures/primary/wal_corrupt/",
+    "description": "same segments but segment 4 has one payload byte flipped mid-file (CRC mismatch with valid records after it)"
+   },
+   {
+    "path": "fixtures/primary/wal_gap/",
+    "description": "same as wal/ with segment 5 removed"
+   },
+   {
+    "path": "fixtures/replica/replica_lagging.db",
+    "description": "a replica DB at applied_lsn=260 used by verify to demonstrate lag and table digest mismatch"
+   }
+  ],
+  "pip_deps": [
+   "pytest (test-time only; application uses only the standard library: sqlite3, zlib, struct, hmac, hashlib, tomllib, json, shutil)"
+  ]
+ },
+ "instruction_outline": "You are on the data-platform team that owns `ledgerwal`, the Python replica tooling for the ledger service. After the 2026-08 failover drill (see docs/incidents/INC-2291-replica-rebuild.md) the replica rebuilt from `fixtures/primary/snapshot_lsn200.db` plus `fixtures/primary/wal/` was wrong and the tool crashed, and the staging masking export was rejected by audit (docs/tickets/DATA-418-staging-masking-audit.md). The primary now writes LWAL 2.1; the authoritative format and recovery semantics are in docs/specs/LWAL-2.1.md and the de-identification rules are in docs/specs/MASKING-POLICY-v3.md. Bring the tooling into full conformance with both specs: `python -m ledgerwal recover --snapshot ... --wal-dir ... --out ...` must produce exactly the committed state the spec defines (including torn-tail tolerance, rejection of corruption and missing segments with the exit codes documented in README.md/cli.py, atomic all-or-nothing output, and the required `_lwal_meta` fields so `verify` can report lag); `python -m ledgerwal mask --source ... --policy config/masking_policy.toml --key keys/mask.key --out ...` must implement every rule kind in the policy exactly as derived in the spec, deterministically and key-dependently, preserving referential consistency across shared token domains, and dropping tables the policy says to drop. Do not modify anything under fixtures/, docs/, config/, keys/ or data/. Keep the CLI flags and exit codes as documented. The `checks/smoke_recover.py` script can help you sanity-check progress. Hidden tests will exercise the CLI against the provided fixtures and against additional WAL streams generated according to the spec, so implement the spec rather than the fixtures.",
+ "required_changes": [
+  "framing.py: distinguish (a) zero header = end of data, (b) torn tail (EOF or zero-fill before full record) allowed only in the highest-numbered segment, (c) CRC mismatch or torn record in a non-final segment = CorruptSegmentError; validate magic/version/segment_id-vs-filename",
+  "records.py: honor flag bits - decompress zlib payload when COMPRESSED is set; represent PARTIAL updates as carrying only the listed columns; decode CHECKPOINT payload (checkpoint_lsn) instead of raising",
+  "segments.py: enforce contiguous segment ids and first_lsn chaining across segments, raising MissingSegmentError on any gap",
+  "replay.py: buffer row changes per txid and apply atomically on COMMIT inside one sqlite transaction; discard on ABORT and for transactions still open at end of log; enforce strictly increasing LSNs (else corruption); start reading at the segment containing recovery_start_lsn; skip records with lsn <= snapshot_lsn unless their txid is in the snapshot's open_txids; write applied_lsn (last applied COMMIT lsn), last_checkpoint_lsn and open_txids='[]' to _lwal_meta so a re-run is a no-op and verify can compute lag",
+  "snapshot.py: read open_txids (JSON list) and recovery_start_lsn from meta and expose them to replay",
+  "apply_sql.py: UPDATE must set only the columns present in the record (PARTIAL semantics) and never NULL absent columns; preserve in-transaction ordering so DELETE followed by INSERT of the same key works",
+  "cli.py: map CorruptSegmentError->exit 2, MissingSegmentError->exit 3, PolicyError->exit 4 with a message on stderr; guarantee no partially applied output (write to a temp file and rename on success, or remove on failure)",
+  "transforms.py: deterministic HMAC-based name pseudonyms drawn from data/masking lists per spec formula; email normalization (strip, lowercase) with domain preserved and 12-hex local part; format-preserving IBAN tokenization keeping country code and last 4, HMAC-derived body digits, recomputed mod-97 check digits; new generalize_dob with 90+ bucket relative to policy as_of_date; free-text redaction of emails and Luhn-valid 13-19 digit PANs (with spaces/dashes) leaving other digit runs intact",
+  "exporter.py + policy.py: parse as_of_date, token_domain and drop_table rules; derive tokens from the shared token_domain rather than table.column so customers.external_ref and accounts.external_customer_ref stay join-consistent; drop policy-listed tables; write masked='1' and mask_policy_version into _lwal_meta; leave non-PII columns and row counts unchanged"
+ ],
+ "solution_plan": [
+  {
+   "file": "ledgerwal/wal/framing.py",
+   "change": "rewrite record iterator: zero-header EOD detection, torn-vs-corrupt classification with is_last_segment parameter, header validation (magic, version, segment_id matches filename), raise typed errors instead of returning",
+   "approx_loc_changed": 50
+  },
+  {
+   "file": "ledgerwal/wal/records.py",
+   "change": "apply zlib.decompress when COMPRESSED flag set before parsing; add partial=True on RowChange for PARTIAL flag; add Checkpoint dataclass and decoder for type 0x07",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "ledgerwal/wal/segments.py",
+   "change": "after ordering, verify segment ids are consecutive and each header.first_lsn == previous segment's last lsn + 1 (requires tracking last lsn during iteration or a two-pass header scan); raise MissingSegmentError with the missing id",
+   "approx_loc_changed": 25
+  },
+  {
+   "file": "ledgerwal/recovery/snapshot.py",
+   "change": "read open_txids JSON and recovery_start_lsn; return a SnapshotInfo dataclass; copy snapshot to a temp path",
+   "approx_loc_changed": 18
+  },
+  {
+   "file": "ledgerwal/recovery/replay.py",
+   "change": "per-txid buffers, commit-time atomic apply, abort/open discard, LSN monotonicity, start-segment selection by recovery_start_lsn, open_txids-aware skip filter, checkpoint tracking, final meta writes",
+   "approx_loc_changed": 85
+  },
+  {
+   "file": "ledgerwal/recovery/apply_sql.py",
+   "change": "build UPDATE SET clause only from columns present in the record; keep key columns in WHERE",
+   "approx_loc_changed": 15
+  },
+  {
+   "file": "ledgerwal/cli.py",
+   "change": "exception-to-exit-code mapping for recover and mask; temp-file-then-rename output handling and cleanup on failure",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "ledgerwal/masking/policy.py",
+   "change": "parse as_of_date (date), token_domain option, drop_table rule kind; validate unknown kinds -> PolicyError",
+   "approx_loc_changed": 22
+  },
+  {
+   "file": "ledgerwal/masking/transforms.py",
+   "change": "replace random-based names with HMAC index derivation; fix email normalization/domain; format-preserving IBAN with mod-97; add generalize_dob; extend redact_free_text with Luhn PAN detection",
+   "approx_loc_changed": 80
+  },
+  {
+   "file": "ledgerwal/masking/exporter.py",
+   "change": "use token_domain for token derivation; implement drop_table; pass as_of_date to DOB transform; write masked/mask_policy_version meta",
+   "approx_loc_changed": 35
+  }
+ ],
+ "estimated_total_loc_changed": 400,
+ "test_strategy": {
+  "approach": "All tests drive the CLI via subprocess (`python -m ledgerwal ...`) and inspect only observable outputs: exit codes, stderr non-empty on failure, and SQLite contents of output files. Recovery tests: (1) recover the shipped fixture and compare every table's full sorted row set against a golden JSON that the task builder derives from an independent straightforward oracle (a test-side decoder + in-memory transaction model written directly from the spec, not from the reference solution), plus _lwal_meta applied_lsn/last_checkpoint_lsn/open_txids values that follow from the spec; (2) property-style tests: a test-side LWAL 2.1 writer (hidden, in tests/) generates seeded random transaction streams over the same schema with aborts, cross-segment transactions, compressed and partial records, delete-then-insert on the same key, checkpoints, a snapshot boundary with in-flight transactions and a torn tail; expected state is computed by a trivial dict-based model; three fixed seeds are run; (3) failure-mode tests on wal_corrupt/ (exit 2), wal_gap/ (exit 3), and a generated stream with a non-monotonic LSN (exit 2), asserting the output path either does not exist or has applied_lsn unchanged from the snapshot; (4) idempotency: recover again using the recovered DB as snapshot and same wal-dir yields identical table dumps; (5) verify: recovered DB vs fixtures/replica/replica_lagging.db reports lag = applied_lsn difference and flags mismatched tables. Masking tests: mask the recovered fixture (and a small builder-generated DB with crafted edge rows: mixed-case emails, ages 88/89/90/95 as of as_of_date, memos with Luhn-valid and Luhn-invalid digit runs, IBANs from several countries); check determinism (two runs identical), key sensitivity (different key changes tokens), spec-derived expected values computed inside the test with hmac/hashlib per the spec formulas, referential consistency (join cardinality between customers and accounts unchanged and masked ref sets equal), IBAN invariants via an independent mod-97 check, DOB rules, national_id all NULL, name membership in the data lists and equality with the spec's index formula, memo redaction on crafted strings, audit_log absent, non-PII columns byte-identical, row counts preserved, meta fields set.",
+  "invariants_checked": [
+   "recovered tables equal spec-derived committed state (fixture golden + seeded generated streams)",
+   "aborted and never-committed transactions leave no trace; committed transactions are applied wholly in LSN order",
+   "records of transactions listed in snapshot open_txids with lsn <= snapshot_lsn are applied exactly once; other pre-snapshot records are not re-applied",
+   "compressed payloads decoded; partial updates preserve unlisted columns; delete-then-insert within one txn yields the inserted row",
+   "torn tail in last segment tolerated; CRC mismatch mid-log or torn record in non-final segment -> exit 2; segment gap -> exit 3; non-monotonic LSN -> exit 2; failure leaves no partially applied output",
+   "_lwal_meta.applied_lsn, last_checkpoint_lsn, open_txids written; recovery is idempotent; verify lag equals difference of applied_lsn",
+   "masking is deterministic and key-dependent; tokens match spec HMAC formulas; token domains shared across tables keep joins intact",
+   "email local part tokenized and case-normalized with domain preserved; IBAN keeps country and last 4, length preserved, passes mod-97; DOB generalized with 90+ bucket; national_id nulled; names from provided lists; PAN/email redaction in memos leaves non-Luhn digit runs",
+   "dropped tables absent; non-PII columns and row counts unchanged; masked and mask_policy_version meta present"
+  ],
+  "anti_overfit_measures": [
+   "no imports of ledgerwal internals in tests; only the documented CLI and output DB state are observed",
+   "golden expectations come from an independent oracle model written from the spec and from spec formulas evaluated in-test (hmac/hashlib/mod-97/Luhn), never from the reference implementation's output",
+   "seeded generated WAL streams exercise the spec beyond the shipped fixture so fixture-specific hacks fail",
+   "failure handling accepts either 'no output file' or 'output identical to snapshot meta', not one specific cleanup strategy",
+   "row comparisons are order-insensitive and ignore column order; meta compared by key",
+   "name/token assertions rely on spec-mandated derivations that the spec explicitly requires for cross-tool compatibility, so any conformant implementation matches",
+   "no timing, no wall-clock (policy carries as_of_date; segment created_epoch is documented as ignored), no randomness"
+  ],
+  "pre_apply_failure_reason": "Pre-apply, `recover` on the fixture crashes with UnicodeDecodeError on the first COMPRESSED record (or, where it gets further, applies aborted/uncommitted rows, NULLs address columns via full-row UPDATE, skips txn 17's pre-snapshot records, and writes no applied_lsn so verify reports lag as null); wal_corrupt/ and wal_gap/ exit 0 instead of 2/3. `mask` fails with PolicyError on the generalize_dob/drop_table rule kinds, and even with those rules removed produces random names across runs, mismatched external refs between tables, X-filled IBANs and unchanged DOBs. Several test cases therefore fail and reward is 0."
+ },
+ "difficulty_rationale": "A mid-tier model tends to patch the visible symptom (catch UnicodeDecodeError, skip bad records, filter lsn > snapshot_lsn) rather than implement the spec's recovery algorithm; the redo-from-oldest-active-transaction rule (apply pre-snapshot records only for txids in open_txids, start from recovery_start_lsn's segment) is subtle and easy to get half-right, as is distinguishing torn tail from corruption and doing transaction buffering atomically while still enforcing LSN monotonicity across segments. The fixes are spread across ten files in three subsystems with inconsistent assumptions (framing swallows errors, replay assumes streaming apply, apply_sql assumes full rows, exporter assumes per-column salts) that must be reconciled together; generated-stream property tests defeat fixture-specific shortcuts. Masking adds exact-derivation requirements (HMAC formulas, mod-97 recomputation, 90+ age bucket relative to as_of_date, Luhn-gated redaction, shared token domains) where any skipped clause fails. A frontier model can finish in one session because every rule is stated explicitly in the two spec documents, the incident and ticket enumerate the symptoms with concrete row examples, the CLI contract is fixed, the smoke script gives fast feedback, and the whole codebase is about 1500 lines of standard-library Python.",
+ "determinism_notes": "Binary fixtures are committed and never regenerated at runtime; the test-side WAL generator uses fixed seeds; all tokens derive from HMAC-SHA256 over a fixed key file; DOB generalization uses as_of_date from the policy file rather than today's date; the segment header created_epoch is documented as ignored and the recovery tool writes no timestamps into meta (tests do not read any); SQLite comparisons are done on sorted row sets; no network, no threads, no external services; pytest runs with -p no:randomly and PYTHONHASHSEED fixed in test.sh for good measure.",
+ "risks": [
+  "Reference change size sits at the upper end (~400 lines); the implementer should prune (e.g. drop the IBAN mod-97 recomputation or the Luhn gate) if the diff exceeds the target rather than pad",
+  "Building the binary fixtures requires the builder to write a spec-conformant LWAL 2.1 writer and an independent oracle model; these must be kept in tests/ (hidden) and must not be derived from the reference solution to keep goldens independent",
+  "Task may be too hard for the mid-tier model (risk of avg@8 = 0); mitigation: spec documents are highly explicit, incident lists concrete symptoms, README documents exit codes, and a smoke script is provided",
+  "Spec ambiguities (e.g. what counts as 'last segment' for torn-tail tolerance, whether a checkpoint record is required to be committed-state-neutral) must be written unambiguously in LWAL-2.1.md or tests will introduce hidden requirements",
+  "Failure-cleanup contract must be phrased permissively in tests (no output file OR unchanged meta) to avoid penalizing a valid alternative design",
+  "Ensure .dockerignore excludes tests/ and solution/ and that pytest is preinstalled in the image since there is no runtime network"
+ ]
+}

@@ -1,0 +1,238 @@
+{
+ "name": "quaymaster-restart-storm-incident",
+ "category": "System debugging / production-incident remediation (production container orchestration)",
+ "title": "Quaymaster: remediate the INC-2291 rolling-deploy restart storm in a single-node process orchestrator",
+ "summary": "Quaymaster is a small single-node orchestrator (a docker-compose/nomad-lite) that a platform team uses to run a stack of HTTP services and workers as supervised subprocesses: it parses a TOML stack spec, allocates localhost ports from a range, launches tasks, probes HTTP/exec health checks, enforces restart policies with exponential backoff, gates services on dependency health, performs rolling updates with parallelism/order/rollback, persists tasks and events in sqlite, and re-adopts running tasks after a supervisor restart. A rolling deploy of the pricing service (v42 -> v43, whose /healthz returned 503) caused a 40-minute outage: the deploy was declared complete anyway, the gateway crash-looped, pricing restarted 340 times, the port range was exhausted while other replacement tasks failed with 'Address already in use', and after the on-call restarted the supervisor the bad spec was re-applied and dead tasks were still counted as running. The workspace contains the incident ticket/postmortem, the supervisor's JSONL event log from the incident, a PR review thread that partially misdiagnoses the problem, the runbook, and the behavior spec. The agent must diagnose the six interlocking root causes across healthcheck, port allocation, scheduler/restart budget, deployer, supervisor recovery, and process backend, and fix them so the orchestrator behaves as docs/SPEC.md describes, without breaking the public Supervisor API or the event format that ops tooling consumes.",
+ "real_world_grounding": "This mirrors a classic production incident class for homegrown orchestrators/supervisors (systemd-unit wrappers, compose-like runners, Nomad/Kubernetes controllers): health checks that treat 'got a response' as healthy, rolling updates that gate on 'container started' instead of 'healthy', restart budgets whose counter resets at the wrong lifecycle transition (restart storm), port leases released on stop-request rather than confirmed exit (EADDRINUSE) or never released for crashed tasks (range exhaustion), rollbacks that only patch in-memory state, and crash-recovery that blindly trusts persisted PIDs. Evidence trail in the workspace: incident/INC-2291.md (ticket + timeline + on-call notes + 'what we expect after the fix' acceptance bullets written by the SRE lead), incident/supervisor-2026-08-28.jsonl (about 300 real-looking event lines showing health_ok status=503, deploy_completed while gateway 0/2 healthy, 340 task_started for pricing with sub-second gaps, port_exhausted, 'OSError: [Errno 98] Address already in use' in task stderr excerpts, and post-restart status showing pricing 2/2 with one dead pid), incident/pr-118-review.md (review thread on the backoff refactor where the reviewer blames jitter - a red herring - but one comment correctly wonders 'where do we reset attempts?'), docs/SPEC.md (normative lifecycle/restart/health/update/recovery semantics with state names and event schema), docs/RUNBOOK.md (how ops runs quaymaster up/status/deploy/down), deploy/stack.toml plus deploy/stack.v42.toml and deploy/stack.v43.toml (the exact specs involved), and incident/state-snapshot.db (sqlite snapshot taken after the outage with RUNNING rows whose pids are dead and stale port reservations). A visible project unit-test suite (qm_tests/) passes before and after the fix and illustrates why the bugs were not caught (tests only cover spec parsing and backoff arithmetic).",
+ "codebase": {
+  "modules": [
+   {
+    "path": "quaymaster/spec.py",
+    "purpose": "Parse TOML stack specs (tomllib) into ServiceSpec objects: command, replicas, env, version, healthcheck {type http|exec, path/cmd, interval, timeout, retries, start_period}, restart_policy {condition never|on-failure|always, max_attempts, window, backoff_base, backoff_cap}, depends_on (shorthand list or long-form table with condition service_started|service_healthy), update_config {parallelism, order start-first|stop-first, failure_action rollback|pause}, stop_grace_period. Contains the depends_on shorthand normalization defect.",
+    "approx_loc": 130
+   },
+   {
+    "path": "quaymaster/model.py",
+    "purpose": "Dataclasses and enums: ServiceSpec, HealthCheck, RestartPolicy, UpdateConfig, TaskRecord (task_id, service, version, pid, port, state, exit_code, reason, timestamps), TaskState enum (PENDING, STARTING, RUNNING, HEALTHY, UNHEALTHY, STOPPING, EXITED, FAILED, LOST), DeploymentRecord (id, from_version, to_version, state IN_PROGRESS|COMPLETED|ROLLED_BACK|PAUSED), TERMINAL_STATES helper.",
+    "approx_loc": 95
+   },
+   {
+    "path": "quaymaster/clock.py",
+    "purpose": "Clock protocol with SystemClock and ManualClock (now(), advance(), sleep() that advances virtual time). Injected everywhere timing matters so the loop is deterministic under test.",
+    "approx_loc": 35
+   },
+   {
+    "path": "quaymaster/statestore.py",
+    "purpose": "sqlite persistence: tables tasks, deployments, port_leases, current_spec (serialized spec + version), events. CRUD helpers, load-on-startup queries. Contains the port_leases-not-cleared-on-terminal defect and the rollback-not-persisted gap.",
+    "approx_loc": 170
+   },
+   {
+    "path": "quaymaster/portalloc.py",
+    "purpose": "Allocates ports from a configured range using port_leases; in-use set computed from leases joined with task state. Release path only invoked from explicit stop request (defect: leaks on crash, releases too early on stop request).",
+    "approx_loc": 70
+   },
+   {
+    "path": "quaymaster/backoff.py",
+    "purpose": "Exponential restart delay: base * 2**(attempt-1) with cap; deterministic (no jitter, despite what PR-118 review argues about). Cap comparison bug (cap never applied because of unit mismatch ms vs s).",
+    "approx_loc": 40
+   },
+   {
+    "path": "quaymaster/healthcheck.py",
+    "purpose": "HTTP probe via http.client to 127.0.0.1:port/path with timeout, exec probe via subprocess with timeout; HealthTracker keeps per-task consecutive failure count, start_period grace, healthy_since. Defects: any HTTP response counts as healthy; failures during start_period counted toward retries; exec timeout (returncode None) treated as success.",
+    "approx_loc": 120
+   },
+   {
+    "path": "quaymaster/runtime/process_backend.py",
+    "purpose": "Spawns tasks with subprocess.Popen(start_new_session=True), env injection (PORT, TASK_ID, SERVICE_VERSION), stdout/stderr to per-task log files under the run dir, poll() for exits, request_stop() (SIGTERM then SIGKILL after grace, driven by clock via ticks), adopt(pid, task_id) using os.kill(pid,0) and /proc/<pid>/cmdline marker. Defect: stop sends SIGKILL immediately because grace is never threaded through.",
+    "approx_loc": 150
+   },
+   {
+    "path": "quaymaster/scheduler.py",
+    "purpose": "Reconciler: per tick, poll backend for exits, run due health probes, compute desired vs actual per service, spawn missing replicas honoring dependency conditions and restart budget/backoff, replace UNHEALTHY tasks, request stops for surplus tasks. Contains restart-counter-reset-on-RUNNING defect, dependency gating only on initial up, and port release at wrong lifecycle point.",
+    "approx_loc": 220
+   },
+   {
+    "path": "quaymaster/deployer.py",
+    "purpose": "Rolling update state machine: given new spec version, replaces tasks in batches of parallelism with order start-first/stop-first, waits for replacement readiness, tracks DeploymentRecord, on failure_action=rollback restores previous spec. Defects: readiness gate is RUNNING not HEALTHY, batch size off-by-one, start-first stops old before new is healthy, rollback restores in-memory spec only (not persisted, not re-reconciled).",
+    "approx_loc": 190
+   },
+   {
+    "path": "quaymaster/supervisor.py",
+    "purpose": "Public API: Supervisor(spec_path, db_path, run_dir, clock, port_range).tick(), deploy(spec_path), shutdown(), status(); wires store, backend, tracker, scheduler, deployer; startup recovery adopts persisted RUNNING/HEALTHY tasks. Defects: dead pids left RUNNING and counted toward replicas; adopted tasks never re-registered with HealthTracker; shutdown ignores dependency order.",
+    "approx_loc": 170
+   },
+   {
+    "path": "quaymaster/events.py",
+    "purpose": "Structured event emission to events.jsonl in run dir and to the events table: ts (clock seconds), type, service, task_id, pid, port, version, extra. Event type constants documented in SPEC.md.",
+    "approx_loc": 55
+   },
+   {
+    "path": "quaymaster/cli.py",
+    "purpose": "python -m quaymaster up|status|deploy|down|events with argparse; up runs the tick loop with SystemClock and SIGTERM handling; status prints JSON from Supervisor.status().",
+    "approx_loc": 130
+   },
+   {
+    "path": "quaymaster/__main__.py",
+    "purpose": "Entry point delegating to cli.main().",
+    "approx_loc": 5
+   },
+   {
+    "path": "services/echo_api.py",
+    "purpose": "Fixture HTTP workload used by the production stack: http.server with /healthz, /version, /admin/fail-health, /admin/exit?code=N, /admin/release; behaviors via env (HEALTH_STATUS, READY_AFTER_PROBES, CRASH_ON_HEALTHZ, HOLD_SIGTERM_UNTIL_RELEASE, UPSTREAM_URL for dependency-aware health).",
+    "approx_loc": 130
+   },
+   {
+    "path": "services/batch_worker.py",
+    "purpose": "Non-HTTP worker fixture: loops writing heartbeat file, exec health check script reads heartbeat age, on SIGTERM finishes 'in-flight job' and writes shutdown_clean marker then exits 0.",
+    "approx_loc": 60
+   },
+   {
+    "path": "qm_tests/test_spec_and_backoff.py",
+    "purpose": "The project's own unit tests (spec parsing, backoff arithmetic for small attempts, statestore round-trip). Pass before and after; illustrate the coverage gap.",
+    "approx_loc": 110
+   }
+  ],
+  "data_files": [
+   {
+    "path": "deploy/stack.toml",
+    "description": "Current production stack: pricing (2 replicas, http healthcheck, on-failure max_attempts=3 window=120), catalog (depends_on pricing), gateway (2 replicas, depends_on = [\"pricing\",\"catalog\"] shorthand, update_config parallelism=1 start-first rollback), reports-worker (exec healthcheck, stop_grace_period=10)."
+   },
+   {
+    "path": "deploy/stack.v42.toml",
+    "description": "Spec version before the incident deploy (pricing version 42)."
+   },
+   {
+    "path": "deploy/stack.v43.toml",
+    "description": "Spec that triggered the incident (pricing version 43 with new env PRICING_BACKEND that makes /healthz return 503)."
+   },
+   {
+    "path": "incident/INC-2291.md",
+    "description": "Incident ticket and postmortem draft: timeline (deploy at 09:14, gateway 0/2 healthy 09:15-09:19, 340 pricing restarts, port_exhausted 09:26, supervisor restart 09:41 re-applied v43, status showed 2/2 with dead pid), impact, on-call notes, and SRE lead's 'expected behavior after fix' bullets referencing SPEC.md sections."
+   },
+   {
+    "path": "incident/supervisor-2026-08-28.jsonl",
+    "description": "About 300 lines of events.jsonl from the incident window: health_ok with status=503, deploy_completed while gateway unhealthy, rapid task_started/task_exited bursts, port_exhausted, task stderr excerpt lines with Errno 98, post-restart tasks_adopted including dead pid."
+   },
+   {
+    "path": "incident/pr-118-review.md",
+    "description": "Code review thread for the backoff refactor merged two weeks earlier; reviewer blames jitter (red herring) and one comment asks where the attempt counter is reset (partial correct hint)."
+   },
+   {
+    "path": "incident/state-snapshot.db",
+    "description": "sqlite snapshot of quaymaster.db after the incident: tasks rows in RUNNING/HEALTHY with pids that no longer exist (pids in the 3,000,000+ range), 14 stale port_leases, current_spec = v43, deployment row IN_PROGRESS."
+   },
+   {
+    "path": "docs/SPEC.md",
+    "description": "Normative behavior spec: task state machine, health semantics (2xx only, start_period grace, timeout = failure, exec nonzero/timeout = failure), restart budget (attempts reset only after HEALTHY for window seconds; blocked-on-dependency waits do not count), port lease lifecycle (released only when exit confirmed), rolling update rules (readiness = HEALTHY, parallelism, start-first/stop-first, rollback persisted and reconciled), recovery on startup (adopt live pids with cmdline marker, mark others LOST with reason orphaned, release leases, resume probing), shutdown order (reverse dependency, grace then SIGKILL), events.jsonl schema and status() schema."
+   },
+   {
+    "path": "docs/RUNBOOK.md",
+    "description": "Operator runbook: how to run up/status/deploy/down, where logs live, how to read events.jsonl, escalation steps."
+   },
+   {
+    "path": "deploy/healthcheck_worker.sh",
+    "description": "Exec health check script for reports-worker: exits 0 if heartbeat file age < threshold, else 1; can hang when heartbeat dir missing (exercises exec timeout path)."
+   }
+  ],
+  "pip_deps": [
+   "pytest==8.3.x (only for verification; stdlib-only runtime: tomllib, sqlite3, http.client, http.server, subprocess, signal)"
+  ]
+ },
+ "instruction_outline": "You are on-call for the platform team. Read incident/INC-2291.md: a rolling deploy of pricing v43 caused a 40-minute outage and the postmortem lists the observed symptoms (deploy declared complete though the new pricing returned 503 on /healthz; gateway lost all healthy replicas during a parallelism=1 start-first update; pricing restarted hundreds of times with no budget enforcement and sub-second gaps; replacement tasks failed with Address already in use while the port range was later exhausted; after the supervisor restart the v43 spec was re-applied and status showed 2/2 for a service with one dead pid; the reports worker lost in-flight jobs on shutdown). The event log for the incident window, the review thread of the recent backoff refactor, the stack specs involved, and a sqlite snapshot from after the incident are in incident/ and deploy/. docs/SPEC.md is the normative description of how Quaymaster must behave (health semantics, restart budget, port lease lifecycle, rolling updates and rollback, recovery, shutdown). Your job: identify and fix the root causes in the quaymaster package so a stack behaves as SPEC.md describes for every symptom in the ticket, not only the pricing 503 case. Constraints: keep the public Supervisor API (constructor arguments, tick, deploy, shutdown, status), the CLI, the events.jsonl event types/fields and the status() schema documented in SPEC.md stable, because ops tooling parses them; the visible qm_tests must keep passing; do not change the fixture services under services/ to work around orchestrator bugs; the supervisor must start cleanly against incident/state-snapshot.db. You may add tests. Grading is by hidden behavior tests that run stacks of real subprocesses on localhost with an injected ManualClock.",
+ "required_changes": [
+  "Health semantics (quaymaster/healthcheck.py): HTTP probe must count only 2xx as healthy (non-2xx, connection error, timeout = failure); failures inside start_period must not count toward retries and must not mark UNHEALTHY; exec probes that time out (returncode None) or exit nonzero are failures; consecutive-failure counter resets on success; healthy_since is recorded on first success.",
+  "Port lease lifecycle (quaymaster/portalloc.py, quaymaster/statestore.py, quaymaster/scheduler.py): a lease is released exactly when a task reaches a terminal state with a confirmed process exit (poll observed) or is marked LOST, never at stop-request time; leases of crashed/FAILED tasks must be freed so repeated crashes cannot exhaust the range; in-use computation must be based on non-terminal tasks; a replacement task must never be spawned on a port whose previous process is still alive.",
+  "Restart budget and backoff (quaymaster/scheduler.py, quaymaster/backoff.py): restart attempts counter resets only after the task has been HEALTHY continuously for restart_policy.window seconds (not on spawn/RUNNING); when attempts exceed max_attempts the task/service enters FAILED with reason restart_budget_exhausted and no further spawns occur; delay between attempts is base*2**(attempt-1) capped at backoff_cap (fix the unit mismatch so the cap actually applies) and is measured on the injected clock; condition=never never restarts, always restarts on exit code 0 too.",
+  "Dependency gating (quaymaster/spec.py, quaymaster/scheduler.py): shorthand depends_on list must normalize to the same condition as the long form default documented in SPEC.md (service_healthy); dependency conditions must be evaluated on every spawn decision including restarts and replacements, with the dependent waiting in PENDING; time spent blocked on dependencies must not consume the restart budget or backoff.",
+  "Rolling update correctness (quaymaster/deployer.py, quaymaster/statestore.py): a replacement counts as ready only when HEALTHY (or when the service has no healthcheck, RUNNING); at most parallelism replacements in flight (fix off-by-one); order=start-first must not request stop of an old task until its replacement is HEALTHY, stop-first the reverse; if any replacement exhausts its retries/budget during the deployment and failure_action=rollback, the deployment must be marked ROLLED_BACK, the previous spec must become the persisted current_spec, in-flight new-version tasks stopped, and reconciliation must restore replicas of the old version; failure_action=pause leaves the deployment PAUSED with old tasks intact; a supervisor restarted on the same db must continue with the rolled-back spec, not re-apply the failed one.",
+  "Recovery and shutdown (quaymaster/supervisor.py, quaymaster/runtime/process_backend.py): on startup, persisted RUNNING/HEALTHY tasks are adopted only if the pid is alive and its /proc cmdline carries the task marker; otherwise the task is marked LOST with reason orphaned, its lease released, and the scheduler re-creates the replica; adopted tasks are re-registered with the health tracker so they are probed and replaced when unhealthy; status() counts reflect only live tasks; shutdown stops services in reverse dependency order, sending SIGTERM and escalating to SIGKILL only after stop_grace_period has elapsed on the clock, recording the exit code."
+ ],
+ "solution_plan": [
+  {
+   "file": "quaymaster/healthcheck.py",
+   "change": "Return a structured ProbeResult (ok, status/rc, reason); treat only 200-299 as ok; treat timeout/connection errors/non-2xx as failure; in HealthTracker.observe(), skip failure accounting while now < started_at + start_period (still record success); exec probe: subprocess.run with timeout, TimeoutExpired -> failure; track healthy_since and reset consecutive_failures on success.",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "quaymaster/portalloc.py",
+   "change": "Compute in-use ports from leases whose task is non-terminal; add release_for_task(task_id) idempotent; remove release from stop-request path; refuse to hand out a port whose lease is still attached to a task whose exit is not yet confirmed.",
+   "approx_loc_changed": 25
+  },
+  {
+   "file": "quaymaster/statestore.py",
+   "change": "Add set_current_spec(version, blob) used by rollback; release lease inside the same transaction as marking a task terminal; add query for non-terminal leases; add LOST state handling in mark_terminal(reason).",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "quaymaster/backoff.py",
+   "change": "Fix cap application (both in seconds), formula base*2**(attempt-1) for attempt>=1, return 0 for attempt 0.",
+   "approx_loc_changed": 10
+  },
+  {
+   "file": "quaymaster/scheduler.py",
+   "change": "Rework the exit-handling path: on confirmed exit mark terminal + release lease + compute next_eligible_at from backoff; maintain per-service RestartBudget {attempts, budget_reset_at} reset only when a task's healthy_since + window <= now; mark FAILED reason restart_budget_exhausted and stop spawning; evaluate dependencies in the spawn gate for initial, restart and replacement spawns, holding a PENDING placeholder that does not increment attempts; move UNHEALTHY replacement to request_stop and only spawn replacement after exit confirmed (or on a different free port).",
+   "approx_loc_changed": 85
+  },
+  {
+   "file": "quaymaster/spec.py",
+   "change": "Normalize shorthand depends_on to condition=service_healthy; validate parallelism>=1; thread stop_grace_period through.",
+   "approx_loc_changed": 12
+  },
+  {
+   "file": "quaymaster/deployer.py",
+   "change": "Readiness predicate = HEALTHY (RUNNING only when no healthcheck); batch selection limited to parallelism minus in-flight; start-first: spawn new, wait ready, then request_stop old; stop-first: request stop, wait exit confirmed, spawn new; detect replacement failure (task FAILED/budget exhausted) and execute rollback: persist previous spec via store.set_current_spec, mark deployment ROLLED_BACK, request stop of new-version tasks, emit deploy_rolled_back, let scheduler reconcile; pause path leaves deployment PAUSED.",
+   "approx_loc_changed": 75
+  },
+  {
+   "file": "quaymaster/supervisor.py",
+   "change": "Startup recovery: for each persisted live-state task, adopt only if backend.adopt(pid, task_id) confirms cmdline marker; else mark LOST reason orphaned and release lease; register adopted tasks with HealthTracker with started_at=now-start_period so they are probed immediately; load current_spec from store when present (so rolled-back spec wins over spec_path unless deploy() is called); shutdown(): topologically order services, stop dependents first, tick backend with clock until exits or grace expiry.",
+   "approx_loc_changed": 50
+  },
+  {
+   "file": "quaymaster/runtime/process_backend.py",
+   "change": "request_stop(task, grace): SIGTERM to process group, record stop_requested_at; in poll(), escalate to SIGKILL when clock.now() - stop_requested_at >= grace; adopt(pid, task_id) verifies /proc/<pid>/cmdline contains the task marker; return exit codes for adopted processes via os.waitpid where possible or /proc absence.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "quaymaster/model.py",
+   "change": "Add LOST to TaskState and TERMINAL_STATES; add reason constants; add healthy_since/next_eligible_at fields to TaskRecord.",
+   "approx_loc_changed": 8
+  }
+ ],
+ "estimated_total_loc_changed": 370,
+ "test_strategy": {
+  "approach": "Hidden pytest suite in /tests drives the public Supervisor API with a ManualClock and real subprocess workloads. The tests ship their OWN pristine copies of the fixture workloads (tests/fixtures/echo_api.py, tests/fixtures/batch_worker.py) and generate stack TOML files pointing at them, so edits to /app/services cannot influence results. Each test uses a private tmp run dir and sqlite db and a dedicated slice of ports in 47100-47199. Helper functions wait_for_listen(port) and wait_for_exit(pid) poll real conditions with bounded timeouts (never assert on wall-clock timing); all orchestration timing (health intervals, backoff, start_period, grace, windows) is advanced via clock.advance() followed by supervisor.tick(). Observations come only from documented surfaces: supervisor.status() (per-service desired/running/healthy counts and per-task state/port/pid/version), events.jsonl (documented event types and fields), HTTP responses from the workloads themselves (/version on each live port), /proc liveness of pids, marker files written by the worker fixture, and sqlite current_spec version via a fresh Supervisor on the same db. Tests: (1) 503 healthz -> after retries consecutive failures task becomes UNHEALTHY and is replaced, and READY_AFTER_PROBES=3 within start_period never causes a restart; (2) exec probe timeout counted as failure; (3) restart budget: CRASH_ON_HEALTHZ workload with max_attempts=3 yields exactly 4 task_started events then FAILED reason restart_budget_exhausted and zero spawns after advancing 20 min; virtual gaps between successive spawns are >= base*2**(n-1) and <= cap; a service healthy for > window then crashing gets a fresh budget; (4) port lifecycle: range of replicas+1 ports, crash a replica 6 times -> no port_exhausted event, every live task has a distinct in-range port, count of live leases == live tasks; HOLD_SIGTERM_UNTIL_RELEASE workload replaced while old process still alive -> replacement binds successfully (becomes HEALTHY, different port) and old port reused only after old pid gone; (5) rolling update good path: 2 replicas v1 -> v2 with parallelism=1 start-first -> at no tick fewer than 2 HEALTHY tasks, never more than 1 STARTING/RUNNING-new task simultaneously, end state all /version == v2 and deployment COMPLETED; bad path: v2 with HEALTH_STATUS=503 -> deployment ROLLED_BACK, 2 HEALTHY tasks serving v1, no v2 pid alive, and a new Supervisor opened on the same db (spec_path still pointing at v2 file? no: constructed with the original v1 path but the store is authoritative) reports v1 and spawns nothing new; stop-first variant and failure_action=pause variant; (6) dependency gating: gateway depends_on pricing via shorthand list; kill pricing 4 times; gateway replacement is never task_started before a pricing HEALTHY event at the same or earlier virtual time, gateway never reaches restart_budget_exhausted although its max_attempts=2; (7) recovery: start stack, drop Supervisor object without shutdown, SIGKILL one task directly, open new Supervisor on same db -> live pids adopted (same pids, no duplicate spawn), killed task marked LOST/terminal with lease freed and replica respawned, status healthy count equals live processes; then /admin/fail-health on an adopted task -> it gets replaced (probing resumed); incident/state-snapshot.db startup must not raise and status shows 0 running for dead pids; (8) shutdown: worker writes shutdown_clean marker and exit code 0 recorded; gateway task_stopped events precede pricing task_stopped; a HOLD_SIGTERM_UNTIL_RELEASE task is SIGKILLed only after advancing the clock by stop_grace_period; (9) CLI status subprocess prints JSON consistent with the db. test.sh runs pytest -x off, writes 1 to /logs/verifier/reward.txt only if exit 0, else 0.",
+  "invariants_checked": [
+   "Only 2xx HTTP probe results are healthy; timeouts/non-2xx/connection failures are failures; failures during start_period do not count toward retries",
+   "Number of task_started events for a crash-looping service equals 1 + max_attempts, then no more spawns until budget reset conditions hold",
+   "Inter-spawn virtual delays satisfy base*2**(n-1) <= delay <= backoff_cap",
+   "Set of ports of live tasks is duplicate-free and within range; live leases == live tasks; no port_exhausted with range size replicas+1 across repeated crashes",
+   "No task is spawned on a port whose previous holder pid is still alive (checked via events pid/port plus /proc)",
+   "During start-first parallelism=1 update, healthy count never drops below replicas and in-flight replacements never exceed parallelism",
+   "Failed update with failure_action=rollback ends with all live tasks serving old version, deployment ROLLED_BACK, and persisted current spec = old version across supervisor restart",
+   "Dependent service spawns only after dependency HEALTHY (virtual ts ordering) and blocked waits do not consume its restart budget",
+   "After restart, dead-pid tasks are terminal with leases freed and replicas recreated; adopted tasks are probed and replaced when unhealthy; snapshot db loads without error",
+   "Shutdown: reverse dependency order, SIGTERM first, SIGKILL only after grace elapsed on the clock, worker marker file present with exit code 0",
+   "Visible qm_tests still pass"
+  ],
+  "anti_overfit_measures": [
+   "Tests observe only surfaces pinned in instruction.md and SPEC.md (Supervisor API, status() schema, events.jsonl types/fields, workload HTTP responses, /proc, marker files); no assertions on internal classes, function names, sqlite schema beyond current spec version exposed via status()",
+   "Terminal state for orphaned tasks accepted as any of LOST/FAILED/EXITED as long as it is not counted as running/healthy and its lease is freed",
+   "Backoff checked as bounds (>= formula lower bound, <= cap) not exact values; event ordering checked by virtual timestamps, not by array positions",
+   "Tests bring their own fixture workloads and generate specs at runtime, so modifying /app/services or deploy/*.toml does not help",
+   "Each scenario is independent (separate db, run dir, port slice) so alternative designs (e.g. releasing leases in the store vs allocator, placeholder PENDING tasks vs deferred spawn) all pass provided observable behavior matches SPEC.md",
+   "Several tests use different specs (different replicas, windows, parallelism, order) than deploy/stack.toml to prevent hardcoding to the incident configuration"
+  ],
+  "pre_apply_failure_reason": "Pre-fix, test (1) fails because 503 is treated as healthy and the task is never replaced; test (3) fails because attempts reset on RUNNING so spawns never stop and the cap is never applied; test (4) fails with port_exhausted and/or replacement bind failure; test (5) fails because the bad deployment is marked COMPLETED and a restarted supervisor re-applies v2; test (6) fails because gateway restarts without waiting for pricing and exhausts its budget; test (7) fails because dead pids stay RUNNING and adopted tasks are never probed; test (8) fails because SIGKILL is sent immediately so the worker never writes its marker."
+ },
+ "difficulty_rationale": "The symptoms in the ticket are each caused by a different defect in a different module, and several are counter-intuitive: the port problem is two-sided (leases leak for crashed tasks AND are released too early on stop request), so a naive 'release on stop' patch makes the EADDRINUSE symptom worse; the restart storm is caused by the counter reset living at the wrong lifecycle transition (needs SPEC.md's 'healthy for window' rule, not the jitter theory the PR review promotes); the deploy disaster is a composition of the health bug, the RUNNING-vs-HEALTHY readiness gate, a parallelism off-by-one and an unpersisted rollback, each of which must be fixed for the rolling-update tests to pass; dependency gating must be applied on restarts without consuming the budget, which requires coordinating scheduler state with the restart-budget logic; recovery requires understanding that adoption must re-register health tracking, otherwise adopted tasks are silently unmonitored. A mid-tier model typically fixes the 2xx check and the obvious lease release, declares victory when the pricing scenario looks better, and fails the rollback-persistence, budget-reset, start-first ordering and adopt-and-probe tests. A frontier model can finish in one session because the codebase is about 1,800 lines, SPEC.md states every required semantic precisely, the ticket enumerates the symptoms, the event log shows the exact wrong transitions, and a ManualClock plus fixture admin endpoints make local reproduction fast. The visible qm_tests demonstrate the harness for writing reproduction tests.",
+ "determinism_notes": "All orchestration timing (health intervals, start_period, retries windows, backoff delays, restart windows, stop grace) is driven by the injected ManualClock; the supervisor never calls time.time() or time.sleep() directly (SystemClock is used only by the CLI loop). Fixture workload behaviors are triggered by probes or explicit admin HTTP calls (CRASH_ON_HEALTHZ exits when probed; HOLD_SIGTERM_UNTIL_RELEASE ignores SIGTERM until /admin/release), never by wall-clock timers. Tests wait on real conditions (port listening, pid exit) with bounded polling before advancing the virtual clock, so process scheduling latency cannot change outcomes. Ports are fixed slices of 47100-47199 unused in a fresh python:3.11-slim container; the sqlite snapshot uses pids above 3,000,000 with a cmdline marker check so pid reuse cannot cause false adoption. Backoff has no jitter. No network beyond 127.0.0.1, no external services, no pip installs at runtime (pytest baked into the image).",
+ "risks": [
+  "Real subprocess tests can be slow or flaky under heavy CI load; mitigated by bounded waits (up to 15 s) on real conditions, small stacks per test, and a total test budget around 60-90 s",
+  "Agent may change the Supervisor constructor or status()/events schema despite instruction; mitigated by explicitly pinning them in instruction.md and SPEC.md and by tests tolerating additive fields",
+  "Too many interlocking defects could push qwen avg@8 to 0; mitigated by the ticket enumerating each symptom and SPEC.md stating each rule, and by keeping tests scenario-based so a nearly complete fix still shows partial progress in logs (reward remains all-or-nothing per Harbor rules)",
+  "Implementer must ensure the visible qm_tests do not encode buggy behavior and that the fixture snapshot db matches the store schema the code expects at startup",
+  "Reference solve.sh must be measured to land in the 150-400 changed-line band; deployer/scheduler rewrites can balloon, so keep changes surgical",
+  "/proc must be available in the container (true for Docker on Linux); adoption test should degrade gracefully if /proc/<pid>/cmdline is unreadable by treating the pid as not adoptable"
+ ]
+}

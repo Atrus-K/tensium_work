@@ -1,0 +1,275 @@
+{
+ "name": "gammaline-hpge-activity-metrology",
+ "category": "Coding for STEM (radiation metrology: HPGe gamma-spectrometry activity concentrations and ISO-11929-style characteristic limits)",
+ "title": "Gammaline: fix the HPGe gamma-spectrometry evaluation chain that failed proficiency test PT-2026-01 and implement the .Chn reader required by LAB-MES-2",
+ "summary": "The workspace is `gammaline`, the evaluation software of a small radioanalytical laboratory: it reads HPGe gamma spectra, locates regions of interest from a nuclide library, computes net peak areas over a linear continuum, subtracts a long ambient background spectrum, applies energy/FWHM/efficiency calibrations, corrects for radioactive decay, combines multiple gamma lines of a nuclide into one activity concentration with a full uncertainty budget, derives decision threshold and detection limit, and writes a batch results CSV through a CLI. The lab's normative evaluation standard (docs/spec/LAB-MES-2_measurement_evaluation.md), the two ORTEC file-format specs, and the retired QuickBASIC routine the code was ported from all live in the workspace. The lab failed proficiency exercise PT-2026-01 (CAPA ticket QA-2026-014): Cs-137 came out about 13% low with a z-score of -4.1, the short-lived Tc-99m QC source read about 11% low, Am-241 was reported as \"detected\" when the certificate says it is absent, four of nine February spectra were silently skipped because they are ORTEC binary .Chn files the reader does not support, and Ra-226 is biased high because its 186 keV line is used even though the library flags it as interfered by U-235. The agent must implement the missing binary reader and repair the evaluation chain (dead-time/live-time normalisation, net-area and background variance, the three decay corrections, the efficiency model and its uncertainty, the characteristic limits, line combination and reporting) so the batch reproduces the certified PT values and obeys LAB-MES-2 exactly.",
+ "real_world_grounding": "This mirrors what actually happens in an accredited radiometrology lab after a failed intercomparison: a CAPA ticket is opened, the analyst compares reported values against the PT certificate that arrives afterwards, and the root causes turn out to be spread across the whole evaluation chain rather than in one formula \u2014 the classic ones being live-time vs real-time confusion in background subtraction and decay-during-counting, a Currie-style \"3-sigma of gross counts\" rule inherited from a spreadsheet macro instead of the standard's characteristic limits, an efficiency polynomial evaluated in the wrong logarithm base relative to the calibration certificate's stated model, and an unsupported acquisition file format that makes half a batch vanish behind a WARN line nobody reads. Evidence trail shipped in the workspace: (1) docs/tickets/QA-2026-014_capa.md \u2014 the CAPA ticket with the PT z-score table, the analyst's reproduction notes, and the metrology manager's \"what must be true when this is closed\" acceptance bullets written in physical terms; (2) docs/pt/PT-2026-01_certificate.csv \u2014 the proficiency-test certificate (certified activity concentrations, expanded uncertainties, and explicit \"not present\" entries) that arrived after the exercise, giving a checkable physical anchor; (3) docs/spec/LAB-MES-2_measurement_evaluation.md \u2014 the lab's normative evaluation standard (symbols, ROI and continuum construction, variance formulae, the three decay factors, the uncertainty budget, decision threshold and detection limit with the implicit equation, weighted-mean line combination with chi-square consistency scaling, interference exclusion, rounding and reporting rules, and the exact results-CSV schema); (4) docs/spec/ortec_spe_format.md and docs/spec/ortec_chn_format.md \u2014 the two acquisition file-format specifications, the binary one describing the 20 ms timer ticks, the signed 16-bit header fields, the DDMMMYY century-flag date and the uint32 channel array; (5) legacy/ACTCALC.BAS \u2014 the read-only QuickBASIC routine from the retired counting-room spreadsheet the current Python was ported from, containing the superseded 3-sigma detection rule, the days-only half-life assumption and a comment (\"TICKS ARE 20 MSEC - DIVIDE BY 50\") the Python port dropped; (6) logs/batch_2026-02-03.log \u2014 the production run log with \"unsupported spectrum format .Chn, skipping\", dead-time warnings and \"negative net activity clamped to 0\"; (7) results_2026-02-03.csv \u2014 the wrong results file the CAPA ticket quotes; (8) a visible in-repo suite (lab_tests/) that passes before and after the fix and shows why none of this was caught: it only covers ASCII parsing, manifest validation and channel-to-energy conversion.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "gammaline/spectrum.py",
+    "purpose": "Spectrum dataclass: counts array (numpy int64), live_time_s, real_time_s, start_datetime, channel count, detector id, source path, embedded calibration coefficients; channel<->energy helpers and slice/sum accessors used by every downstream module.",
+    "approx_loc": 95
+   },
+   {
+    "path": "gammaline/io/spe_reader.py",
+    "purpose": "ORTEC ASCII .Spe parser: $SPEC_ID, $SPEC_REM, $DATE_MEA (MM/DD/YYYY HH:MM:SS), $MEAS_TIM (live then real, whole seconds), $DATA (first last plus one count per line), $ENER_FIT/$MCA_CAL, $ROI. Complete and correct; the model for what the binary reader must produce.",
+    "approx_loc": 120
+   },
+   {
+    "path": "gammaline/io/chn_reader.py",
+    "purpose": "ORTEC binary .Chn parser. Ships as a stub raising UnsupportedSpectrumFormat with a TODO pointing at docs/spec/ortec_chn_format.md; must be implemented (little-endian struct: type word -1, MCA/segment numbers, ASCII start-second field, real time and live time in 20 ms ticks, DDMMMYY date with century flag, int16 start channel and channel count, uint32 channel data, optional 0x0102 footer with three float32 energy coefficients).",
+    "approx_loc": 20
+   },
+   {
+    "path": "gammaline/io/registry.py",
+    "purpose": "Extension->reader dispatch (case-insensitive) and load_spectrum(path) used by the CLI; currently only .spe is registered and unknown extensions are logged-and-skipped.",
+    "approx_loc": 45
+   },
+   {
+    "path": "gammaline/manifest.py",
+    "purpose": "Reads samples/manifest.csv into SampleRecord objects (sample_id, spectrum file, background file, sample mass in kg and its relative uncertainty, sampling datetime, geometry id, detector id, nuclides to report) and validates the file references on disk.",
+    "approx_loc": 75
+   },
+   {
+    "path": "gammaline/nuclides.py",
+    "purpose": "Loads data/nuclide_library.json: half-life value plus unit string ('s','m','h','d','a'), decay constant, per-line energy, emission probability and its relative uncertainty, and per-line interference flags naming the interfering nuclide. Contains the days-only half-life conversion inherited from the legacy macro.",
+    "approx_loc": 95
+   },
+   {
+    "path": "gammaline/calibration.py",
+    "purpose": "Energy calibration (quadratic fit of the Eu-152/Ba-133 calibration CSV via numpy.polyfit), FWHM(E)=sqrt(a+b*E) fit, and the detector/geometry efficiency curve loaded from the calibration certificate JSON together with its stated relative uncertainty and validity range.",
+    "approx_loc": 130
+   },
+   {
+    "path": "gammaline/roi.py",
+    "purpose": "Builds the region of interest for a line: peak channel from the energy calibration, peak window of +/- n_fwhm*FWHM channels, left/right continuum base regions of m channels each with the spec's offsets, clamping at spectrum edges and a validity flag when a window is truncated.",
+    "approx_loc": 95
+   },
+   {
+    "path": "gammaline/netarea.py",
+    "purpose": "Gross counts in the peak window, linear continuum estimate from the two base regions, net area and its variance.",
+    "approx_loc": 105
+   },
+   {
+    "path": "gammaline/background.py",
+    "purpose": "Ambient background subtraction: evaluates the same ROI on the long background spectrum and subtracts a time-normalised contribution, propagating the background variance into the net count rate.",
+    "approx_loc": 80
+   },
+   {
+    "path": "gammaline/decay.py",
+    "purpose": "Decay constant from the library and the decay correction factors: reference of the result to the sampling instant, decay between sampling and count start, and the decay-during-counting factor.",
+    "approx_loc": 85
+   },
+   {
+    "path": "gammaline/activity.py",
+    "purpose": "Assembles the per-line activity concentration a = R_net * w with w = 1/(eps(E)*p_gamma*m) times the decay factors, and builds the combined standard uncertainty from the counting term plus the relative uncertainties of efficiency, emission probability and mass; exposes the zero-net-effect uncertainty and the relative uncertainty of w.",
+    "approx_loc": 135
+   },
+   {
+    "path": "gammaline/limits.py",
+    "purpose": "Characteristic limits per LAB-MES-2: decision threshold from the standard uncertainty of a vanishing net effect, detection limit from the standard's implicit equation containing the relative uncertainty of the calibration factor, and the below-threshold best estimate. Currently a literal port of the legacy 3-sigma-of-gross-counts rule.",
+    "approx_loc": 90
+   },
+   {
+    "path": "gammaline/combine.py",
+    "purpose": "Combines the usable lines of one nuclide into a single result: interference exclusion, inverse-variance weighted mean, chi-square consistency check with uncertainty scaling, and the list of lines actually used.",
+    "approx_loc": 100
+   },
+   {
+    "path": "gammaline/report.py",
+    "purpose": "Rounding rules (uncertainty to two significant digits, value rounded to the same decimal place), the '< DL' reported-value form for non-detections, and the results-CSV writer with the schema fixed by LAB-MES-2.",
+    "approx_loc": 110
+   },
+   {
+    "path": "gammaline/cli.py",
+    "purpose": "argparse batch entry point: `python -m gammaline.cli analyze --manifest samples/manifest.csv --library data/nuclide_library.json --calibration calibration/ --out results.csv`, plus a --sample filter and a `describe` subcommand printing one spectrum's header.",
+    "approx_loc": 120
+   },
+   {
+    "path": "gammaline/errors.py",
+    "purpose": "Exception hierarchy (UnsupportedSpectrumFormat, SpectrumParseError, CalibrationRangeError, LibraryError) and the logger configuration that produces the batch log.",
+    "approx_loc": 40
+   },
+   {
+    "path": "tools/inspect_spectrum.py",
+    "purpose": "Analyst utility that dumps a spectrum header and a channel-range sum; used in the CAPA ticket's reproduction notes.",
+    "approx_loc": 60
+   },
+   {
+    "path": "lab_tests/test_spe_and_energy.py",
+    "purpose": "The visible in-repo suite (passes before and after): ASCII header parsing, channel<->energy round-trip, manifest validation, ROI window arithmetic. Demonstrates the coverage gap that let the PT failure through.",
+    "approx_loc": 130
+   }
+  ],
+  "data_files": [
+   {
+    "path": "docs/spec/LAB-MES-2_measurement_evaluation.md",
+    "description": "The lab's normative evaluation standard (~450 lines): symbol table; ROI and continuum construction with base-region widths and offsets; net area and variance including the continuum term; live-time normalisation of the ambient background and its variance contribution; the three decay factors (reference to sampling instant, sampling->count-start, decay during counting from elapsed/real time); the efficiency model as stated by the certificate; the full uncertainty budget; decision threshold and the implicit detection-limit equation with its k factors; weighted-mean line combination, chi-square consistency scaling and interference exclusion; rounding and '< DL' reporting rules; and the exact results-CSV column schema."
+   },
+   {
+    "path": "docs/spec/ortec_chn_format.md",
+    "description": "Binary .Chn format specification: field-by-field little-endian byte layout, type word -1, MCA and segment numbers, ASCII start-second field, real time and live time in 20 ms increments, DDMMMYY date with the century-flag character, int16 start channel and number of channels, uint32 channel array, and the optional 0x0102 calibration footer with three float32 energy coefficients."
+   },
+   {
+    "path": "docs/spec/ortec_spe_format.md",
+    "description": "ASCII .Spe record specification for the already-supported reader; establishes that $MEAS_TIM is live then real in whole seconds and how $DATE_MEA is formatted."
+   },
+   {
+    "path": "docs/tickets/QA-2026-014_capa.md",
+    "description": "CAPA ticket for the failed proficiency exercise: z-score table (Cs-137 -4.1, Tc-99m -3.6, Am-241 false positive, Ra-226 +2.9), analyst reproduction notes with tools/inspect_spectrum.py output, the observation that four of nine February spectra never appear in the results file, and the metrology manager's acceptance bullets phrased as physical requirements."
+   },
+   {
+    "path": "docs/pt/PT-2026-01_certificate.csv",
+    "description": "Proficiency-test certificate: certified activity concentration and expanded uncertainty (k=2) per nuclide for the PT sample, including explicit 'not present, below 0.5 Bq/kg' entries for Am-241 and Co-60; the physical anchor the fixed pipeline must reproduce."
+   },
+   {
+    "path": "legacy/ACTCALC.BAS",
+    "description": "Read-only QuickBASIC routine from the retired counting-room spreadsheet the Python was ported from: the superseded 3-sigma-of-gross-counts detection rule, the days-only half-life handling, the absent decay-during-counting factor, and the dropped comment 'TICKS ARE 20 MSEC - DIVIDE BY 50'."
+   },
+   {
+    "path": "data/nuclide_library.json",
+    "description": "Nuclide library: Cs-137, Co-60, K-40, Am-241, Ra-226 (186.2 keV flagged interfered by U-235), Pb-214, Bi-214, U-235, Ac-228, Ba-133, Eu-152, Tc-99m; half-lives in mixed units ('30.08 a', '6.0067 h', '5.2712 a', '1.2504e9 a', '5.243 d'), per-line energies, emission probabilities and their relative uncertainties."
+   },
+   {
+    "path": "calibration/efficiency_cert_HPGeA_geomA.json and calibration/efficiency_cert_HPGeA_geomB.json",
+    "description": "Detector/geometry efficiency calibration certificates: the stated model form (ln eps as a polynomial in ln(E/keV)), the coefficients, the validity range in keV, and the certificate's relative standard uncertainty of the efficiency."
+   },
+   {
+    "path": "calibration/energy_fwhm_cal_HPGeA.csv",
+    "description": "Eu-152/Ba-133 calibration run: channel, certified energy, measured FWHM in channels; source of the quadratic energy calibration and the FWHM model."
+   },
+   {
+    "path": "spectra/*.Spe (5 ASCII) and spectra/*.Chn (5 binary)",
+    "description": "The February batch: PT-2026-01 stored twice (an ASCII and a binary record of the same acquisition, for the cross-format check), the Tc-99m QC source counted twice at different start times and durations, two soil samples, a filter sample, and BKG-2026-02-01_long.Chn, the 3-day ambient background. Spectra are synthesised deterministically at task-build time as fixed integer counts and shipped as fixtures only; no generator script is shipped into /app."
+   },
+   {
+    "path": "samples/manifest.csv",
+    "description": "Per-sample record: sample_id, spectrum file, background file, sample mass in kg and its relative uncertainty, sampling datetime, geometry id, detector id, and the nuclides to report."
+   },
+   {
+    "path": "logs/batch_2026-02-03.log",
+    "description": "Production run log of the failing batch: 'unsupported spectrum format .Chn, skipping', dead-time percentages, 'negative net activity clamped to 0', and the detected/non-detected decisions the CAPA ticket disputes."
+   },
+   {
+    "path": "README.md, CHANGELOG.md, results_2026-02-03.csv",
+    "description": "README with the CLI usage and the results-CSV contract, a changelog entry recording the port from ACTCALC.BAS, and the wrong results file the CAPA ticket quotes."
+   }
+  ],
+  "pip_deps": [
+   "numpy==2.1.3",
+   "scipy==1.14.1",
+   "pytest==8.4.1"
+  ]
+ },
+ "instruction_outline": "Framed as the engineering assignment attached to CAPA ticket QA-2026-014. Context: gammaline is the lab's gamma-spectrometry evaluation package; proficiency exercise PT-2026-01 failed and the CAPA can only be closed by making the batch evaluation conform to LAB-MES-2. Points the agent at the evidence: the CAPA ticket and its acceptance bullets, the PT certificate, the normative standard docs/spec/LAB-MES-2_measurement_evaluation.md, the two ORTEC format specs, the legacy ACTCALC.BAS the code was ported from, and the failing batch log and results file. States the deliverable in observable terms: `python -m gammaline.cli analyze --manifest samples/manifest.csv --out <path>` must evaluate every sample in the manifest \u2014 including those stored as ORTEC binary .Chn \u2014 and write the results CSV with exactly the schema and reporting/rounding rules defined in LAB-MES-2; results are activity concentrations in Bq/kg referenced to the sampling instant; every reported nuclide must carry its combined standard uncertainty, decision threshold and detection limit; non-detections must appear in the standard's '< detection limit' form rather than as a clamped or negative activity; lines the nuclide library flags as interfered must not contribute; multi-line nuclides must be reported as the standard's consistency-checked weighted mean. Notes the physical acceptance conditions: the PT sample must agree with docs/pt/PT-2026-01_certificate.csv within |z| <= 2 for every certified nuclide and be reported as non-detected for the nuclides the certificate declares absent; the two Tc-99m QC acquisitions, which differ in start time and duration, must agree with each other; the ASCII and binary records of the same PT acquisition must yield identical numbers. Constraints: keep the CLI contract, the results-CSV schema and the public loader behaviour; do not weaken the visible lab_tests/ suite; the run must be offline, deterministic and independent of the current date. No mention of hidden tests, files under tests/, or any assertion detail.",
+ "required_changes": [
+  "Implement the ORTEC binary .Chn reader per docs/spec/ortec_chn_format.md and register it so the CLI evaluates .Chn spectra instead of logging 'unsupported spectrum format' and skipping them: little-endian layout, real time and live time expressed in 20 ms timer ticks (must be converted to seconds), the ASCII start-second field combined with the DDMMMYY date whose century flag distinguishes 19xx from 20xx, int16 start channel and number of channels, uint32 channel data, and the optional 0x0102 footer supplying energy calibration coefficients.",
+  "Normalise the ambient background contribution by live time rather than real time (the 3-day background has a very different dead-time fraction from the sample spectra) and propagate the background counting variance into the net count-rate variance instead of dropping it.",
+  "Compute the net peak area variance with the continuum term required by LAB-MES-2 \u2014 gross counts plus the squared continuum-scaling factor times the summed base-region counts \u2014 instead of the current sqrt(gross) approximation, and build the left/right base regions with the widths and offsets the standard specifies.",
+  "Convert half-lives using the unit string carried in the nuclide library ('s','m','h','d','a') instead of assuming days, so short-lived (Tc-99m) and very long-lived (K-40, U-235) nuclides are both handled.",
+  "Apply all three decay corrections defined by the standard: reference of the result to the sampling instant, decay between the sampling instant and the count start, and the decay-during-counting factor computed from the elapsed (real) counting time rather than the live time \u2014 currently only the first is applied, which is why the short-lived QC source reads low and the two Tc-99m acquisitions disagree.",
+  "Evaluate the efficiency curve in the model form the calibration certificate states (polynomial in the natural logarithm of the energy, exponentiated), enforce the certificate's validity range, and carry the certificate's relative standard uncertainty of the efficiency into the uncertainty budget together with the emission-probability and sample-mass relative uncertainties.",
+  "Replace the legacy 3-sigma-of-gross-counts detection rule with the standard's characteristic limits: a decision threshold derived from the standard uncertainty of a vanishing net effect expressed in activity-concentration units, and a detection limit satisfying the standard's implicit equation, which contains the relative uncertainty of the calibration factor (solvable by iteration or in closed form). The decision threshold must always be below the detection limit.",
+  "Combine the usable lines of a multi-line nuclide into one result by inverse-variance weighted mean with the standard's chi-square consistency check and uncertainty scaling, and exclude any line the nuclide library flags as interfered (Ra-226 at 186.2 keV when U-235 is in the sample's reporting scope) instead of averaging all lines unweighted.",
+  "Report per LAB-MES-2: a net effect below the decision threshold is reported as non-detected in the '< detection limit' form (never as a clamped zero or a negative activity), the uncertainty is rounded to two significant digits with the value rounded to the same decimal place, and the results CSV carries the standard's full column schema for every sample/nuclide pair including the previously skipped .Chn samples."
+ ],
+ "solution_plan": [
+  {
+   "file": "gammaline/io/chn_reader.py",
+   "change": "Replace the stub with a full binary reader: struct-unpack the header, convert the 20 ms tick fields to seconds, assemble the start datetime from the ASCII second field plus the DDMMMYY date and its century flag, read the uint32 channel array with numpy.frombuffer, parse the optional 0x0102 calibration footer, and return the same Spectrum object the ASCII reader returns; raise SpectrumParseError on a wrong type word or a truncated file.",
+   "approx_loc_changed": 105
+  },
+  {
+   "file": "gammaline/io/registry.py",
+   "change": "Register the binary reader for '.chn' (case-insensitive) and turn the 'unsupported format, skip' path into a hard error for known extensions so a batch can no longer silently drop samples.",
+   "approx_loc_changed": 12
+  },
+  {
+   "file": "gammaline/background.py",
+   "change": "Switch background scaling from real time to live time and add the background variance term to the returned net-rate variance.",
+   "approx_loc_changed": 22
+  },
+  {
+   "file": "gammaline/netarea.py",
+   "change": "Build the base regions with the spec's widths/offsets and return the net area with the full variance expression including the continuum-scaling term.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "gammaline/nuclides.py",
+   "change": "Parse the half-life unit suffix into seconds for all five units and expose the decay constant plus the per-line interference flag.",
+   "approx_loc_changed": 25
+  },
+  {
+   "file": "gammaline/decay.py",
+   "change": "Add the sampling->count-start decay factor and the decay-during-counting factor based on elapsed real time, and return a combined factor together with its propagated relative uncertainty.",
+   "approx_loc_changed": 38
+  },
+  {
+   "file": "gammaline/calibration.py",
+   "change": "Evaluate the efficiency in the certificate's ln-ln model form, enforce the validity range (raise CalibrationRangeError outside it), and expose the certificate's relative efficiency uncertainty.",
+   "approx_loc_changed": 28
+  },
+  {
+   "file": "gammaline/activity.py",
+   "change": "Assemble the calibration factor w and the combined standard uncertainty from the counting term plus the efficiency, emission-probability and mass relative terms, and expose the zero-net-effect uncertainty and the relative uncertainty of w that the limits module needs.",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "gammaline/limits.py",
+   "change": "Implement the decision threshold and the implicit detection-limit equation (fixed-point iteration with a convergence guard and iteration cap, or the closed form), plus the below-threshold best estimate.",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "gammaline/combine.py",
+   "change": "Drop interfered lines, replace the unweighted average with an inverse-variance weighted mean, add the chi-square consistency check and uncertainty scaling, and propagate the per-line limits to the combined result.",
+   "approx_loc_changed": 42
+  },
+  {
+   "file": "gammaline/report.py",
+   "change": "Implement the two-significant-digit uncertainty rounding with matched value precision and the '< DL' non-detection form, remove the negative-activity clamp, and emit the full CSV schema.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "gammaline/cli.py",
+   "change": "Wire the new loader path and the limits/combination results through the batch loop so every manifest row (both formats) reaches the report writer, and keep the run free of any wall-clock dependence.",
+   "approx_loc_changed": 18
+  }
+ ],
+ "estimated_total_loc_changed": 355,
+ "test_strategy": {
+  "approach": "All hidden tests drive the documented CLI and parse the results CSV it writes into a pytest tmp directory; nothing imports private helpers or asserts on function names, module layout or intermediate data structures. Three families: (a) physical-anchor tests against the PT certificate plus a small set of golden numbers recomputed independently from LAB-MES-2 with generous tolerances; (b) property/invariance tests that synthesise new fixtures at run time (writing new .Spe and .Chn files, copying and editing a certificate JSON or the manifest into tmp) and assert relations between runs rather than absolute values; (c) schema and reporting-rule tests on the CSV. Fixtures are fixed integer-count spectra with no randomness, so every run is bit-reproducible.",
+  "invariants_checked": [
+   "Cross-format equivalence: the ASCII and binary records of the same PT acquisition produce numerically identical rows (all numeric columns equal within 1e-9) \u2014 fails outright pre-apply because the .Chn sample is skipped, and catches the 20 ms tick and header-offset traps without asserting anything about the parser.",
+   "Certificate agreement: for every nuclide certified in docs/pt/PT-2026-01_certificate.csv the reported activity concentration satisfies |z| <= 2 using combined expanded uncertainties, and for the nuclides the certificate declares absent the row is reported as non-detected.",
+   "Golden batch values: per sample/nuclide activity within 0.5% relative, combined standard uncertainty within 5%, decision threshold and detection limit within 5% of values derived from the standard by an independent recomputation, so an alternative but correct implementation still passes.",
+   "Dead-time invariance: two synthesised spectra with identical live time and channel contents but different real time give the same background-subtracted activity for a long-lived nuclide (isolating live-time background normalisation), while a short-lived nuclide's decay-during-counting factor correctly follows the real time.",
+   "Counting-time/decay consistency: the two Tc-99m acquisitions (different start times and durations) agree within 1%, and a synthesised third acquisition of the same source with doubled duration also agrees \u2014 a relation no partial decay correction can satisfy.",
+   "Counting-statistics scaling: doubling both times and all counts in a synthesised spectrum leaves the activity unchanged within 0.5% while reducing the combined standard uncertainty and the detection limit by roughly sqrt(2) (asserted as a 1.25-1.60 band).",
+   "Uncertainty-budget wiring: running against a tmp copy of the efficiency certificate whose stated relative uncertainty is enlarged leaves the activity unchanged but strictly increases the combined uncertainty and the detection limit, proving the certificate term is propagated rather than hard-coded.",
+   "Characteristic-limit ordering and non-detection reporting: decision threshold < detection limit on every row; a synthesised sample containing only background-like counts is reported non-detected with a reported value of the '< value' form matching the detection-limit column, never as a negative or clamped-zero activity.",
+   "Interference and line combination: with U-235 in scope the Ra-226 result excludes the 186.2 keV line and its lines-used field omits it; for a synthesised two-line case with deliberately discrepant lines the combined value lies between the line values and the reported uncertainty exceeds the plain inverse-variance uncertainty (consistency scaling applied).",
+   "Rounding and schema: reported-value strings carry an uncertainty rounded to two significant digits with the value at the same decimal place, and the CSV has exactly the LAB-MES-2 column schema with one row per manifest sample/nuclide pair \u2014 no sample silently missing.",
+   "Determinism: two consecutive runs over the same manifest produce byte-identical CSV output, and no output depends on the container's current date."
+  ],
+  "anti_overfit_measures": [
+   "Every assertion goes through the CLI and the published CSV schema; no hidden test imports a gammaline submodule or references an internal function, class or attribute name.",
+   "Numeric assertions use tolerance bands (0.5% on activities, 5% on uncertainties and limits) so different-but-valid choices \u2014 closed-form vs iterative detection limit, numpy vs pure-Python continuum arithmetic, any spec-conformant base-region indexing within the stated widths \u2014 all pass.",
+   "About half the checks are relational property tests over fixtures the tests synthesise themselves (scaled counts, altered dead time, longer count, inflated efficiency uncertainty, discrepant two-line case), which cannot be satisfied by hard-coding the shipped batch's numbers.",
+   "The PT certificate anchor is an independent oracle: physical truth shipped with the workspace, not a copy of the reference implementation's output.",
+   "The pre-existing wrong results_2026-02-03.csv is in the workspace, so a copy-the-existing-output shortcut is actively wrong; hidden tests always write to a fresh tmp path and ignore any pre-existing results file.",
+   "Tests never assert on log text, file mtimes, column order beyond the documented schema, or the iteration count of the detection-limit solver."
+  ],
+  "pre_apply_failure_reason": "Pre-apply the batch skips every .Chn sample (so the cross-format, Tc-99m consistency and full-schema tests fail immediately), Cs-137 and Tc-99m miss the certified values well outside |z| <= 2 because of the real-time background normalisation, the missing decay corrections and the mis-evaluated efficiency curve, Am-241 is reported as detected under the legacy 3-sigma rule, no detection-limit content satisfies DT < DL, non-detections appear as clamped zeros instead of '< DL', and Ra-226 includes the interfered 186.2 keV line. At least ten hidden test cases fail; the visible lab_tests/ suite passes both before and after."
+ },
+ "difficulty_rationale": "The work cannot be done by pattern-matching one file: the agent must reconcile a normative evaluation standard, two file-format specs, a legacy QuickBASIC source and a CAPA ticket, then thread the consequences through eleven modules. The traps that defeat mid-tier models are (1) the binary format's 20 ms timer ticks and century-flag date, stated once in the format spec and echoed only as a dropped comment in the legacy source \u2014 getting them wrong yields plausible but 50x-wrong times that surface only as a cross-format mismatch; (2) three different time quantities \u2014 live time for counting statistics and background normalisation, real/elapsed time for the decay-during-counting factor, and the wall-clock difference for the sampling-to-count-start factor \u2014 each correct in exactly one place, where the characteristic mid-tier failure is using live time everywhere or applying only one decay factor while still producing sane-looking numbers; (3) the detection limit being defined by an implicit equation whose relative-calibration-uncertainty term is easy to drop, giving a limit that looks fine until the inflated-efficiency-uncertainty property test; (4) the uncertainty budget having to be assembled from four sources across three modules before the limits module can consume it, so a symptom-level patch inside limits.py alone cannot pass; (5) interference exclusion plus chi-square consistency scaling in line combination, which requires reading both the library flags and the standard's combination section. A frontier model can finish in one session because the standard states every formula, the PT certificate is an unambiguous physical check to iterate against, the ASCII reader is a complete template for the binary one, and the failing results file plus batch log localise every symptom.",
+ "determinism_notes": "No randomness anywhere: spectra are fixed integer-count fixtures generated once at task-build time and shipped as static files (the generator is not shipped into /app), so no Poisson sampling occurs at run time. All timestamps come from file headers and the manifest; the pipeline never reads the system clock, and results are referenced to the sampling instant given in the manifest, so output is invariant to the container's date. numpy/scipy are pinned and only deterministic routines are used (polyfit over a fixed calibration table, norm.ppf for the k factors, an iteration with fixed tolerance and iteration cap). Hidden tests use fixed tolerances, write only under pytest tmp_path, run offline, and assert byte-identical output across two consecutive runs. Floating-point comparisons are relative-tolerance based except the cross-format case, where both paths consume identical integer counts and identically derived times.",
+ "risks": [
+  "The golden numbers must be produced by the reference solution and then independently re-derived from LAB-MES-2 during construction; disagreement means the spec text is ambiguous and must be tightened before shipping (especially base-region widths/offsets, the k factors, and whether the emission-probability uncertainty enters the relative calibration-factor uncertainty used by the detection limit).",
+  "The binary .Chn fixtures must be byte-exact and their ASCII twin must encode the identical acquisition, or the cross-format equality test becomes unsatisfiable; the pair must be written from one in-memory acquisition object at build time.",
+  "Scope creep: the design deliberately omits self-absorption/geometry corrections, true-coincidence summing and peak fitting; adding them would push the change past 400 lines and make the spec text unmanageable.",
+  "Rounding assertions can be brittle; they are confined to the reported-value string column with the rule quoted verbatim in the spec, while every numeric column is asserted with tolerances.",
+  "The interference rule must be unambiguous in both the library and the spec (the flag names the interfering nuclide; exclusion applies when that nuclide is in the sample's reporting scope), otherwise a defensible alternative reading could fail a test.",
+  "numpy 2.x / scipy wheel availability on python:3.11-slim must be confirmed at build time; if scipy proves unnecessary weight, norm.ppf can be replaced by the k factors tabulated in the spec and the dep set reduced to numpy plus pytest."
+ ]
+}

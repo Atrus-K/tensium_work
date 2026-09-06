@@ -1,0 +1,239 @@
+{
+ "name": "ledgerbridge-switchover-recovery",
+ "category": "Data / database migration and recovery: online switchover, WAL recovery, data masking, graph queries",
+ "title": "LedgerBridge: fix the failed online switchover rehearsal (WAL recovery, idempotent replay, join-preserving masking)",
+ "summary": "LedgerBridge is a small in-house Python tool a payments team uses to migrate a live SQLite \"accounts\" database from schema v1 to schema v2 with near-zero downtime: application writes on the v1 source are captured into an append-only change table, drained into a custom binary write-ahead log (WAL), replayed onto a v2 target through a row transformer, verified (row counts, per-table checksums, transfer-graph component fingerprint), and finally cut over by a phase-based coordinator; a masking engine produces a PII-safe staging replica along the same pipeline. Rehearsal #3 of the switchover (ticket INC-2031 in the workspace, with coordinator logs, a failing verify report, the torn WAL segments captured from the crashed node, and an unresolved PR review comment) failed in several ways: the WAL reader dies on the torn tail and applies half-committed transactions, the replayer duplicates rows after a crash because progress is persisted outside the apply transaction and UPDATE/DELETE match on pre-image columns, the v1->v2 transform truncates cents and inverts timezone offsets, the masking engine tokenizes PII with a per-process random salt (breaking customer/account joins) and is bypassed entirely on the catch-up path, the coordinator restarts from PREPARE on recovery and gates cutover on the wrong lag measure, and the linked-accounts graph query treats transfers as directed and ignores the hop bound. The agent must read the incident evidence and the specs (docs/wal-format.md, docs/masking-policy.md, docs/switchover-runbook.md), diagnose the root causes across the wal, apply, schema, masking, switchover and graph packages, and fix them without changing the on-disk WAL format or CLI surface so that a full rehearsal (bulk copy -> catch-up under a seeded workload -> crash -> recover -> verify -> cutover) and a masked staging build both succeed.",
+ "real_world_grounding": "This is exactly the shape of a real zero-downtime database migration project at a small fintech: dual-write/CDC via an application-level changelog, a hand-rolled WAL with segments and CRCs, a replayer with a progress table, a schema transform with money and timezone semantics, a masking pass for staging copies, a phased coordinator with a runbook, and a verification step comparing source and target. The defects are the classic ones teams actually ship: non-atomic progress markers, eager application of uncommitted WAL records, float money math, sign errors on UTC offsets, non-deterministic tokenization that breaks referential integrity in masked data, a masking path that only covers the bulk load, and a resume routine that re-runs a completed phase. The evidence trail lives in the workspace: docs/incidents/INC-2031-switchover-rehearsal.md (timeline, symptoms with concrete customer/account ids and counts, the kill -9 at 09:41:17 during CATCHUP, \"staging joins return 0 rows\", \"verify: transactions 2517 vs 2563\"), logs/rehearsal-0904/coordinator.log and catchup.stderr (the struct.error traceback from the torn tail, the UNIQUE constraint failures on re-apply), logs/rehearsal-0904/verify-report.json (per-table mismatches and the component-count mismatch), fixtures/incident/wal/000001.wal + 000002.wal (the segments copied off the crashed node, with a truncated final frame and an unterminated transaction), fixtures/incident/switchover_state.json (the coordinator state at crash time), docs/pr-418-review.md (a reviewer asked \"progress LSN is written in a separate connection before commit; is this safe under crash?\" and the author replied \"fine for now, follow-up\" and merged), docs/wal-format.md (the frame layout and recovery rules), docs/masking-policy.md (determinism and format-preservation requirements), and docs/switchover-runbook.md (phase semantics, the rehearsal chaos flag --crash-after-records, and the resume contract).",
+ "codebase": {
+  "modules": [
+   {
+    "path": "ledgerbridge/wal/format.py",
+    "purpose": "WAL frame encoding/decoding per docs/wal-format.md: magic + version header, frame = [u32 length][u64 lsn][u64 txn_id][u8 kind: BEGIN/ROW/COMMIT][u8 op: I/U/D][u16 table-name length][table][JSON payload with before/after][u32 crc32 over everything after length]. Provides encode_frame/decode_frame and FrameKind constants.",
+    "approx_loc": 110
+   },
+   {
+    "path": "ledgerbridge/wal/writer.py",
+    "purpose": "SegmentWriter: appends frames to numbered segment files (000001.wal ...), rotates at a byte threshold, fsyncs on commit, assigns monotonic LSNs; used by the tailer.",
+    "approx_loc": 85
+   },
+   {
+    "path": "ledgerbridge/wal/reader.py",
+    "purpose": "SegmentReader: iterates all segments in a directory in order and yields decoded frames; exposes read_committed(dir, after_lsn) which should group frames into transactions and yield only committed ones, stopping cleanly at a torn/corrupt tail and reporting the safe-end LSN. (Defective: raises on torn tail, trusts length before CRC, yields ROW frames before seeing COMMIT.)",
+    "approx_loc": 110
+   },
+   {
+    "path": "ledgerbridge/capture/changelog.py",
+    "purpose": "Source-side write API used by the application/workload: SourceSession.transaction() context manager that writes business rows to the v1 tables and mirrors them into _lb_changelog (txn_id, seq, table, op, before_json, after_json, committed flag set on commit) in the same SQLite transaction.",
+    "approx_loc": 120
+   },
+   {
+    "path": "ledgerbridge/capture/tailer.py",
+    "purpose": "Drains committed _lb_changelog entries into WAL frames (BEGIN/ROW.../COMMIT per txn) via SegmentWriter, records the drained changelog high-water mark in _lb_tailer_state; reports capture lag (committed changelog txns not yet in WAL).",
+    "approx_loc": 80
+   },
+   {
+    "path": "ledgerbridge/schema/transform.py",
+    "purpose": "Row-level v1->v2 transformation for customers, accounts, transactions: balance TEXT decimal -> balance_cents INTEGER, posted_at local string + tz_offset_min -> posted_at_utc epoch, country free text -> ISO alpha-2 via fixtures/country_aliases.csv, column renames. (Defective: int(float(x)*100) truncation, offset sign inverted, alias lookup case/whitespace sensitive.)",
+    "approx_loc": 130
+   },
+   {
+    "path": "ledgerbridge/apply/bulk_copy.py",
+    "purpose": "Initial snapshot load: reads all v1 rows inside one read transaction, records the snapshot changelog watermark, transforms (and optionally masks) rows into the v2 target, writes the starting LSN into _lb_progress.",
+    "approx_loc": 85
+   },
+   {
+    "path": "ledgerbridge/apply/replayer.py",
+    "purpose": "Applies committed WAL transactions to the v2 target: INSERT/UPDATE/DELETE after transform, honours --crash-after-records chaos flag, maintains _lb_progress(applied_lsn). Should be atomic per source txn with the progress update, idempotent on re-delivery (skip lsn <= applied), match UPDATE/DELETE by primary key, and route rows through the masking engine when the target is a staging replica. (Defective on all four points.)",
+    "approx_loc": 165
+   },
+   {
+    "path": "ledgerbridge/masking/rules.py",
+    "purpose": "Masking rule implementations loaded from config/masking_policy.json: hmac_token (keyed, deterministic, fixed-length hex), email_preserve_domain (token local part, keep domain), pan_last4 (mask all but last 4, keep length and separators), null_out, date_shift (deterministic per-subject shift). (Defective: salt = os.urandom per process, email rule replaces whole address, pan rule keeps first 4 instead of last 4.)",
+    "approx_loc": 110
+   },
+   {
+    "path": "ledgerbridge/masking/engine.py",
+    "purpose": "MaskingEngine: resolves policy per table/column, applies rules to a transformed v2 row dict, exposes mask_row(table, row); loads the masking key from an env var or --mask-key argument; used by bulk_copy and (should be) by replayer.",
+    "approx_loc": 90
+   },
+   {
+    "path": "ledgerbridge/switchover/coordinator.py",
+    "purpose": "Phase state machine PREPARE -> BULK_COPY -> CATCHUP -> FREEZE -> VERIFY -> CUTOVER with a JSON state file (phase, snapshot watermark, applied_lsn, attempt count); supports --stop-after PHASE for rehearsals and a recover entry point that must resume from the persisted phase; FREEZE must wait until capture lag and apply lag are both zero; CUTOVER only when verify passes and writes cutover.json. Clock injected via --now / LEDGERBRIDGE_NOW. (Defective: recover restarts at PREPARE, lag gate compares changelog row id with applied LSN, cutover proceeds when verify reports mismatches.)",
+    "approx_loc": 190
+   },
+   {
+    "path": "ledgerbridge/switchover/verify.py",
+    "purpose": "Produces verify-report.json: per-table row counts and order-independent checksums computed on transformed source rows vs target rows, plus transfer-graph component fingerprint from graph/transfers.py; returns ok flag.",
+    "approx_loc": 110
+   },
+   {
+    "path": "ledgerbridge/graph/transfers.py",
+    "purpose": "Builds the account transfer graph from transactions (account_id, counterparty_account_id), computes connected components (union-find), and answers linked_accounts(account_id, max_hops) used by verify and the CLI linked-accounts command. (Defective: BFS follows only outgoing edges and does not stop at max_hops; self-transfers create a phantom component.)",
+    "approx_loc": 90
+   },
+   {
+    "path": "ledgerbridge/workload/simulator.py",
+    "purpose": "Seeded workload generator that applies a deterministic sequence of inserts/updates/deletes/transfers to the v1 source through SourceSession during CATCHUP (used by rehearsals and the make_fixtures tool).",
+    "approx_loc": 90
+   },
+   {
+    "path": "ledgerbridge/cli.py",
+    "purpose": "argparse CLI: init-source, bulk-copy, tail, catchup, mask, verify, rehearse (runs the coordinator with workload), recover, linked-accounts, wal-inspect. All test interaction goes through this surface plus DB/file state.",
+    "approx_loc": 160
+   },
+   {
+    "path": "tools/make_fixtures.py",
+    "purpose": "Deterministic builder run at image build: creates fixtures/source_v1.db from source_v1.sql, replays the seeded workload to emit fixtures/incident/wal segments, then truncates the last frame and drops the COMMIT of the final txn to reproduce the crashed node's segments.",
+    "approx_loc": 120
+   }
+  ],
+  "data_files": [
+   {
+    "path": "ledgerbridge/schema/v1.sql",
+    "description": "v1 DDL: customers(id, full_name, email, country TEXT, phone), accounts(id, customer_id, number TEXT PAN-like, balance TEXT decimal, owner_email), transactions(id, account_id, counterparty_account_id NULL, amount TEXT, posted_at TEXT local, tz_offset_min INTEGER), plus _lb_changelog and _lb_tailer_state."
+   },
+   {
+    "path": "ledgerbridge/schema/v2.sql",
+    "description": "v2 DDL: customers(id, full_name, email, country_code CHAR(2), phone), accounts(id, customer_id, number, balance_cents INTEGER, owner_email), transactions(id, account_id, counterparty_account_id, amount_cents INTEGER, posted_at_utc INTEGER) with PKs and FK indexes, plus _lb_progress(applied_lsn, snapshot_watermark)."
+   },
+   {
+    "path": "fixtures/source_v1.sql",
+    "description": "Seeded dump: ~240 customers (countries spelled inconsistently: 'United States', 'united states ', 'USA', 'U.S.'), ~400 accounts with balances like '0.29', '1010.07', '2.675' and 16-digit PAN-like numbers with dashes, ~2500 transactions with mixed tz offsets (-480, -300, 0, 60, 330, 545) including transfers forming several components and some self-transfers."
+   },
+   {
+    "path": "fixtures/country_aliases.csv",
+    "description": "alias,iso2 mapping with mixed case and trailing spaces used by the transform."
+   },
+   {
+    "path": "fixtures/incident/wal/000001.wal, 000002.wal",
+    "description": "WAL segments copied from the crashed node (generated deterministically at build): valid committed txns, one txn whose COMMIT frame is missing, and a torn final frame (length header claims 412 bytes, only 187 present)."
+   },
+   {
+    "path": "fixtures/incident/switchover_state.json",
+    "description": "Coordinator state captured at the crash: phase CATCHUP, snapshot_watermark, applied_lsn, attempt 1."
+   },
+   {
+    "path": "config/masking_policy.json",
+    "description": "Per-table/column masking rules: customers.email -> email_preserve_domain, accounts.owner_email -> email_preserve_domain (same subject key), accounts.number -> pan_last4, customers.full_name -> hmac_token, customers.phone -> null_out, transactions.posted_at_utc -> date_shift."
+   },
+   {
+    "path": "docs/incidents/INC-2031-switchover-rehearsal.md",
+    "description": "Incident ticket with timeline, symptoms, concrete ids/counts, and open questions; the primary evidence trail."
+   },
+   {
+    "path": "docs/wal-format.md",
+    "description": "Frame layout, LSN/txn semantics, recovery rules: stop at first frame whose CRC or length fails, discard everything after, never apply ROW frames of a txn without COMMIT, safe-end LSN definition."
+   },
+   {
+    "path": "docs/masking-policy.md",
+    "description": "Masking requirements: deterministic under a fixed key, identical output for identical input across tables and runs, different keys produce different tokens, format preservation rules, and the requirement that catch-up replay onto staging is masked identically to bulk copy."
+   },
+   {
+    "path": "docs/switchover-runbook.md",
+    "description": "Phase definitions, lag definitions (capture lag vs apply lag), --stop-after and --crash-after-records rehearsal knobs, resume contract for recover, cutover preconditions and cutover.json contents."
+   },
+   {
+    "path": "docs/pr-418-review.md",
+    "description": "Review thread for the replayer PR with the unresolved 'progress written outside transaction' comment and a second comment about matching UPDATEs on before-image columns after transform."
+   },
+   {
+    "path": "logs/rehearsal-0904/coordinator.log, catchup.stderr, verify-report.json",
+    "description": "Logs from the failed rehearsal: phase transitions, kill at CATCHUP, struct.error traceback on resume, UNIQUE constraint failures, verify mismatches per table and component count 41 vs 43."
+   }
+  ],
+  "pip_deps": [
+   "pytest"
+  ]
+ },
+ "instruction_outline": "You are on the data platform team that owns LedgerBridge, the tool used to migrate the accounts database from schema v1 to v2 online. Rehearsal #3 of the switchover failed and was written up as INC-2031 (docs/incidents/). Read the ticket, the rehearsal logs under logs/rehearsal-0904/, the WAL segments and coordinator state under fixtures/incident/, the PR-418 review thread, and the specifications in docs/wal-format.md, docs/masking-policy.md and docs/switchover-runbook.md. Find and fix the root causes in the code so that: (1) WAL recovery follows the format spec (torn or corrupt tails are handled without error, only committed transactions are applied, the safe-end LSN is reported by wal-inspect); (2) catch-up replay is crash-safe and idempotent, so a run interrupted with the --crash-after-records rehearsal flag and then resumed yields exactly the same target as an uninterrupted run, and UPDATE/DELETE apply correctly to already-transformed rows; (3) the v1->v2 transform is exact for money amounts, timestamps and country codes as described in the schema docs; (4) masking to a staging replica is deterministic under a fixed key, preserves joins between customers and accounts, preserves the documented formats, and is applied identically during bulk copy and during catch-up replay; (5) the coordinator's recover command resumes from the persisted phase, FREEZE only completes when both lags defined in the runbook are zero, and CUTOVER only happens when verification passes; (6) the linked-accounts graph query and the component fingerprint in verify behave as documented (undirected, bounded by hops, self-transfers ignored). Constraints: keep the WAL on-disk format, CLI command names and flags, database schemas and state-file layout unchanged; do not add dependencies; the fixture data must not be edited. A full rehearsal via python -m ledgerbridge.cli rehearse and a masked staging build via python -m ledgerbridge.cli mask must both succeed end to end. Do not mention the hidden tests.",
+ "required_changes": [
+  "WAL reader: stop at the first frame whose declared length exceeds the remaining bytes or whose CRC fails, discard everything after it, and never raise; report the safe-end LSN (last COMMIT frame before the stop) through read_committed/wal-inspect.",
+  "WAL reader: buffer ROW frames per txn_id and yield a transaction only when its COMMIT frame is seen; frames of a txn without COMMIT (including the incident's last txn) are never applied.",
+  "Replayer: apply each committed WAL transaction and the _lb_progress applied_lsn update inside a single SQLite transaction on the same connection, so a crash between them cannot happen; skip transactions with lsn <= applied_lsn on re-delivery (idempotent re-run yields zero applied and identical DB).",
+  "Replayer: match UPDATE and DELETE rows by the table's primary key from the transformed row, not by equality on all before-image v1 columns (which never match after transform, silently affecting zero rows).",
+  "Replayer: when the target is a staging replica (--mask-key given / staging flag), route transformed rows through the MaskingEngine exactly as bulk_copy does, so catch-up does not leak raw PII into staging.",
+  "Transform: convert TEXT decimal balances/amounts to integer cents exactly (Decimal quantize), not int(float(x)*100); convert local posted_at plus tz_offset_min to UTC epoch with the correct offset sign; normalize country lookups (case/whitespace/punctuation) against fixtures/country_aliases.csv so no known alias maps to NULL.",
+  "Masking rules: hmac_token derives from HMAC-SHA256(key, table-independent subject value) so the same input yields the same token across tables, runs and processes; different keys yield different tokens; email_preserve_domain tokenizes only the local part and keeps the domain; pan_last4 keeps the last four digits and preserves length and separator positions.",
+  "Coordinator: recover resumes from the persisted phase (never re-runs BULK_COPY on a populated target), increments attempt, and continues through CUTOVER; FREEZE waits until capture lag (committed changelog txns not yet in WAL) and apply lag (WAL safe-end LSN minus applied_lsn) are both zero, comparing like with like; CUTOVER is refused when verify reports mismatches and cutover.json records the final LSN when it succeeds.",
+  "Graph: linked_accounts treats transfers as undirected, stops at max_hops, ignores self-transfers and NULL counterparties; connected-component fingerprint in verify is consistent between source (v1 column names) and target (v2) so a correct migration verifies clean."
+ ],
+ "solution_plan": [
+  {
+   "file": "ledgerbridge/wal/reader.py",
+   "change": "Rewrite the segment iteration to read the length prefix, check remaining bytes and CRC before decoding, stop cleanly and record truncated_at; add per-txn buffering keyed by txn_id and yield (lsn_range, rows) only on COMMIT; expose safe_end_lsn; keep the public read_committed(dir, after_lsn) signature and wal-inspect output fields.",
+   "approx_loc_changed": 55
+  },
+  {
+   "file": "ledgerbridge/apply/replayer.py",
+   "change": "Restructure apply loop to BEGIN once per committed txn, apply rows, update _lb_progress in the same transaction, COMMIT; skip txns at or below applied_lsn; build UPDATE/DELETE WHERE clauses from the v2 primary key of the transformed row; accept a MaskingEngine and call mask_row before writing when present; make --crash-after-records raise after a commit boundary check rather than mid-statement with autocommit.",
+   "approx_loc_changed": 70
+  },
+  {
+   "file": "ledgerbridge/schema/transform.py",
+   "change": "Use Decimal with quantize(Decimal('0.01')) and ROUND_HALF_UP for cents; fix UTC conversion to local - offset; normalize alias keys (casefold, strip, remove periods) when loading the CSV and when looking up; keep function names and return shapes.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "ledgerbridge/masking/rules.py",
+   "change": "Replace os.urandom salt with keyed HMAC-SHA256 over the raw value; implement email local-part tokenization preserving the domain; fix pan_last4 to keep the last 4 digits and reinsert separators; make date_shift deterministic per subject id.",
+   "approx_loc_changed": 45
+  },
+  {
+   "file": "ledgerbridge/masking/engine.py",
+   "change": "Construct rules with the key once, add a shared subject-key resolver so customers.email and accounts.owner_email use the same rule instance and input normalization; expose mask_row for the replayer; error clearly if the key is missing when staging is requested.",
+   "approx_loc_changed": 20
+  },
+  {
+   "file": "ledgerbridge/switchover/coordinator.py",
+   "change": "Implement recover() as load state -> dispatch to the persisted phase's step; make FREEZE compute capture lag from the tailer and apply lag from reader.safe_end_lsn vs _lb_progress; run the tailer/replayer loop until both are zero; gate CUTOVER on verify ok and write cutover.json with applied_lsn; persist state after each phase with injected clock.",
+   "approx_loc_changed": 60
+  },
+  {
+   "file": "ledgerbridge/graph/transfers.py",
+   "change": "Build an undirected adjacency set skipping NULL counterparties and self-transfers; BFS with depth tracking bounded by max_hops; union-find components over the same edge set; accept a column-name mapping so verify can run it on v1 and v2.",
+   "approx_loc_changed": 25
+  },
+  {
+   "file": "ledgerbridge/apply/bulk_copy.py",
+   "change": "Share the masking engine construction with the replayer via engine.from_args and record the snapshot watermark and starting LSN in _lb_progress in the same transaction as the copied rows.",
+   "approx_loc_changed": 12
+  },
+  {
+   "file": "ledgerbridge/switchover/verify.py",
+   "change": "Pass v1/v2 column mappings to the graph builder and compute the component fingerprint on both sides consistently; include lag fields in the report.",
+   "approx_loc_changed": 12
+  }
+ ],
+ "estimated_total_loc_changed": 329,
+ "test_strategy": {
+  "approach": "Hidden pytest suite under /tests drives the system only through the documented CLI (python -m ledgerbridge.cli ...) and through observable state: SQLite tables in freshly created temp copies of the fixture DBs, the WAL directory, the coordinator state file, verify-report.json and cutover.json. Each test builds its own temp workspace from /app/fixtures so tests are independent. Tests hand-craft WAL segments byte-by-byte from the docs/wal-format.md layout (independent of the project's writer) to probe torn-tail, corrupt-CRC and missing-COMMIT handling. Expected transform values are computed independently in the test with decimal.Decimal and datetime arithmetic from the v1 rows. Masking tests compare two independent runs, two different keys, and check joins by counting matched customer/account pairs against the source join count; PII leakage is checked by asserting that no raw source email/PAN/full_name string appears anywhere in the staging DB. Crash-safety is tested by running catchup with --crash-after-records N (existing runbook knob) then catchup again, and comparing full table dumps against an uninterrupted run; idempotency by running catchup twice and asserting zero applied and identical dumps. Coordinator tests run rehearse --stop-after CATCHUP, then recover, and assert row counts are not doubled, phase sequence in the state file is monotonic, cutover.json exists with applied_lsn equal to the WAL safe end, and verify-report.json says ok. Graph tests compute components and k-hop reachability with an independent union-find/BFS in the test over the raw transactions table and compare with the linked-accounts CLI output for several seeds of account ids. test.sh runs pytest, writes 1 to /logs/verifier/reward.txt only if the exit code is 0, else 0.",
+  "invariants_checked": [
+   "Reading the incident WAL segments (and hand-built segments with torn tail / bad CRC / missing COMMIT) never raises; the set of applied rows equals exactly the rows of transactions that have a COMMIT frame before the first bad frame; wal-inspect reports safe_end_lsn equal to that COMMIT's lsn.",
+   "catchup run twice over the same WAL: second run applies 0 transactions and every table dump (sorted rows) is byte-identical to the first run; interrupted run (--crash-after-records N for several N) + resumed run equals uninterrupted run for all tables; _lb_progress.applied_lsn equals the WAL safe end.",
+   "For every v1 account/transaction row, the v2 row has balance_cents/amount_cents == Decimal(text)*100 exactly and posted_at_utc == independently computed UTC epoch; no v2 customer has NULL country_code for a country present in country_aliases.csv; UPDATE/DELETE from the workload are reflected (deleted ids absent, updated balances match source).",
+   "Masked staging DB: no raw source email, PAN or full_name appears in any column; customers.email and accounts.owner_email tokens agree for each owner (join count equals source join count); the same key on two runs gives identical tokens, a different key gives different tokens; masked emails keep their domain and match a basic email pattern; masked PANs keep length, separator positions and last 4 digits; rows inserted during catch-up onto staging are masked identically to bulk-copied rows.",
+   "rehearse --stop-after CATCHUP then recover: target row counts equal source counts after workload (not doubled), state file phases proceed forward only, cutover.json written with applied_lsn == safe end, verify-report.ok is true; when the source has committed changelog entries not yet drained, the coordinator does not cut over until they are applied; when the target is deliberately corrupted before VERIFY, cutover is refused and cutover.json absent.",
+   "linked-accounts(account, k) equals independent undirected bounded BFS for sampled accounts and k in {1,2,3}; component count matches independent union-find ignoring self-transfers and NULL counterparties; the verify report's source and target component fingerprints are equal after a correct migration."
+  ],
+  "anti_overfit_measures": [
+   "No test imports or names private functions or classes; interaction is via CLI commands, files and SQLite state, all documented in the README/runbook.",
+   "WAL fixtures for the reader tests are constructed by the test from the byte layout in docs/wal-format.md, so any reader that implements the spec passes regardless of internal structure.",
+   "Expected values are recomputed in the test from the raw v1 data (Decimal, datetime, CSV) rather than copied from the reference output; property-style checks over all rows.",
+   "Masking tests check properties (determinism, key sensitivity, join preservation, format preservation, no leakage) rather than specific token strings, so any keyed deterministic scheme passes.",
+   "Crash and resume tests compare against an uninterrupted run produced by the candidate's own code, so any internally consistent atomic design passes.",
+   "Graph expectations come from an independent union-find/BFS written in the test.",
+   "Tests allow either INSERT OR REPLACE or explicit skip strategies for idempotency by only checking final state and the applied count reported by the CLI (0 on re-run)."
+  ],
+  "pre_apply_failure_reason": "Pre-apply, reading fixtures/incident/wal raises struct.error on the torn tail; the missing-COMMIT rows are applied; catchup twice duplicates transactions rows (UNIQUE failures or doubled counts) and crash+resume differs from a clean run; balance_cents for '0.29' is 28 and posted_at_utc is off by twice the offset; masked customers.email and accounts.owner_email tokens differ so the join count is 0 and staging rows added during catch-up contain raw emails; recover re-runs BULK_COPY producing doubled counts and cutover happens despite verify mismatches; linked-accounts returns directed, unbounded results and component counts differ between source and target."
+ },
+ "difficulty_rationale": "A mid-tier model tends to patch symptoms visible in the logs: wrap the struct.error in try/except (still applying uncommitted rows), switch INSERT to INSERT OR REPLACE (hiding the non-atomic progress marker and leaving UPDATE/DELETE silently matching zero rows), replace the random salt with a hash (but miss that the replayer path never calls the masking engine, so staging still leaks during catch-up), fix recover to skip PREPARE while leaving the lag gate comparing changelog ids with LSNs, and fix the graph BFS direction but not the hop bound or self-transfers. Passing requires connecting evidence across modules: the PR review comment points at the replayer's progress marker, the verify report's count mismatch traces back to both the UPDATE matching and the uncommitted-txn issue, the incident's \"joins return 0 rows\" leads through masking rules, engine and replayer, and the runbook's two lag definitions must be implemented with the reader's safe-end LSN. Each fix has subtle semantics (transaction boundaries in the WAL, same-connection atomicity in sqlite3 with isolation_level, Decimal rounding, UTC sign, format-preserving masking) but every requirement is fully specified in the workspace docs and reproducible with the shipped fixtures and CLI, so a frontier model can diagnose, implement and self-verify in one session. The ~330 changed lines across 9 files are each necessary to make the end-to-end rehearsal and masked build succeed.",
+ "determinism_notes": "All data generation uses fixed seeds (random.Random(20310904)); fixture WAL segments are produced at image build by tools/make_fixtures.py from the seeded workload and deterministic truncation offsets, so bytes are identical across builds. The coordinator and state files take the clock from --now / LEDGERBRIDGE_NOW (tests set a fixed value and never assert on timestamps). Masking uses HMAC with a key passed explicitly (tests pass fixed keys); no os.urandom or hash() randomization survives the fix, and tests set PYTHONHASHSEED=0 anyway. The workload during rehearsal is seeded and single-threaded; no sleeps, sockets or wall-clock waits. SQLite files live in per-test temp dirs; WAL rotation threshold is fixed. No network access is needed at build or run time beyond pip install pytest in the Dockerfile.",
+ "risks": [
+  "Fixture generation at image build must run before the fix exists, so tools/make_fixtures.py must use the WAL writer (correct) and its own truncation logic, never the defective reader; the implementer must verify fixture bytes are stable across two builds.",
+  "The crash-after-records chaos flag must trigger at a deterministic point in both the pre-fix and post-fix replayer (after N ROW frames), otherwise the crash+resume test could be flaky; define it precisely in the runbook and count frames, not statements.",
+  "The isolation_level semantics of Python's sqlite3 (implicit BEGIN before DML, autocommit for DDL) make it easy for an equally valid solution to use isolation_level=None with explicit BEGIN/COMMIT; tests must only look at final state, not at journal mode or connection details.",
+  "Tests must avoid asserting exact token values or exact hop ordering; the implementer should double-check that INSERT OR REPLACE vs skip-by-LSN designs both pass every idempotency assertion.",
+  "Total codebase size is near the upper bound (about 1850 lines); the implementer may trim the workload simulator and CLI to stay within range without removing behaviors the tests exercise.",
+  "The instruction must describe the six requirement areas without enumerating specific bug locations; leaking file-level hints would collapse the capability gap, while omitting the spec pointers would make it unsolvable, so the docs must be complete and consistent with the tests."
+ ]
+}

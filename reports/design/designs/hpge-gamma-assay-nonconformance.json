@@ -1,0 +1,258 @@
+{
+ "name": "hpge-gamma-assay-nonconformance",
+ "category": "Coding for STEM",
+ "title": "HPGe gamma-spectrometry assay: fix the proficiency-test nonconformance across the spectrum reader, decay chain and detection-limit path",
+ "summary": "/app holds nuclex, a small radiation-metrology toolchain a calibration lab uses to turn HPGe gamma-ray spectra into reported nuclide activities: it reads Ortec CHN binary spectra and IAEA ASCII SPE spectra, applies energy/FWHM and detector-efficiency calibrations (selected from a SQLite instrument log), integrates photopeaks, corrects for radioactive decay, combines the per-gamma-line results for each nuclide, computes Currie critical levels and minimum detectable activities, and writes a batch assay report. The lab has just failed an inter-laboratory proficiency round: the accreditation body's nonconformance ticket, the merged-but-flagged PR review that introduced part of the problem, the certified round-robin values, the normative measurement protocol and the failing batch log all live in /app/docs and /app/logs. Reported activities are biased high for short-lived nuclides only, the two gamma lines of the same nuclide disagree by far more than their stated uncertainties, blanks come back as 0 Bq instead of a detection limit, one spectrum in the batch crashes the reader, and the Co-60 1332 keV line is never found. The agent must diagnose the real root causes from that evidence \u2014 live-time/real-time confusion plus a double dead-time correction, a missing decay-during-count term, an unparsed CHN calibration footer, half-life unit handling, calibration-validity selection, unweighted line combination and a missing Currie/MDA path \u2014 and repair them across the reader, calibration, decay, peak-integration, combination and reporting modules so the batch reproduces the certified values within their stated uncertainties.",
+ "real_world_grounding": "This mirrors the routine failure mode of a real gamma-spectrometry lab: an assay pipeline that is \"working\" on long-lived check sources silently fails a proficiency round because several small protocol clauses were implemented loosely, and the symptoms (bias correlated with half-life, inconsistent multi-line results, non-detects reported as zero) only make sense when the spec, the instrument metadata and three code paths are read together. The evidence trail in the workspace is: (1) docs/tickets/RMP-2231_nonconformance.md, the accreditation body's nonconformance notice quoting the failed En numbers per sample and the assessor's three observations; (2) docs/reviews/PR-418_review.md, an internal pull-request review thread in which a reviewer explicitly questions \"we already divide by live time \u2014 isn't the DT factor applied twice?\" and \"why do we only keep the strongest line?\", the author answers \"long-lived sources agree, shipping it\", and the PR is merged; (3) docs/specs/measurement_protocol_v4.md, the lab's normative protocol excerpt with the exact formulas (Covell continuum, decay-during-count, decay-to-reference, inverse-variance line combination with Birge inflation, Currie L_C / L_D, calibration validity rules); (4) docs/formats/ortec_chn_format.md, the vendor format note describing the CHN header and the -102 calibration footer record the current reader ignores; (5) logs/batch_2024-06-14.log, the failing batch run with per-sample lines, a \"no peak found near 1332.50 keV\" warning and a truncated-read traceback for one spectrum; (6) docs/proficiency/PT-2024Q2_certified_values.csv, the provider's certified activities with expanded (k=2) uncertainties, which is the self-check target an engineer would actually use. Data are real instrument artefacts in shape: binary CHN blobs with headers, counts and footers, ASCII SPE files, a SQLite instrument log of calibration validity windows, and a JSON nuclide/gamma-line library with mixed half-life units and interference flags.",
+ "codebase": {
+  "modules": [
+   {
+    "path": "nuclex/io/chn.py",
+    "purpose": "Ortec CHN binary spectrum reader: header (device, segment, start time fields, live/real time in 20 ms ticks, channel offset and count), the uint32 channel array, and the trailing -102 calibration footer carrying quadratic energy calibration and FWHM/shape calibration. Currently decodes live/real time as raw seconds, ignores the footer, and computes the record length so that footer-bearing files fail with a short read.",
+    "approx_loc": 130
+   },
+   {
+    "path": "nuclex/io/spe.py",
+    "purpose": "IAEA/Maestro ASCII SPE reader ($SPEC_ID, $MEAS_TIM live/real pair, $DATE_MEA, $ENER_FIT, $DATA) producing the same in-memory Spectrum object as the CHN reader.",
+    "approx_loc": 85
+   },
+   {
+    "path": "nuclex/models.py",
+    "purpose": "Frozen dataclasses shared by every module: Spectrum (counts array, live_time_s, real_time_s, start_datetime, calibrations), GammaLine, Nuclide, SampleRecord, LineResult, NuclideResult.",
+    "approx_loc": 90
+   },
+   {
+    "path": "nuclex/calibration/energy.py",
+    "purpose": "Channel-to-energy and energy-to-channel conversion and the FWHM(E) resolution model; holds the quadratic/inverse forms and the per-spectrum override coming from the file's calibration record. Currently only the linear terms are honoured.",
+    "approx_loc": 75
+   },
+   {
+    "path": "nuclex/calibration/efficiency.py",
+    "purpose": "Full-energy-peak efficiency model: ln(eff) as a polynomial in ln(E) with a declared validity energy range and a fractional model uncertainty; evaluation, range checking and uncertainty contribution.",
+    "approx_loc": 95
+   },
+   {
+    "path": "nuclex/inventory/calstore.py",
+    "purpose": "Reads the SQLite instrument log: detectors, efficiency-calibration records with geometry and valid_from/valid_to windows, and the background spectrum registered for each detector/period. Currently returns the newest calibration for a detector regardless of the count date or geometry.",
+    "approx_loc": 90
+   },
+   {
+    "path": "nuclex/analysis/peaks.py",
+    "purpose": "Photopeak integration: ROI construction from the expected energy and FWHM model, gross counts, Covell symmetric continuum estimate, net area and its counting uncertainty, background-spectrum subtraction scaled to live time. Currently uses a fixed-width ROI and a single-channel flat baseline.",
+    "approx_loc": 145
+   },
+   {
+    "path": "nuclex/analysis/detect.py",
+    "purpose": "Currie decision level L_C and detection limit L_D in counts, and their conversion to an activity MDA in Bq (or Bq/kg) through efficiency, branching ratio, live time, decay factors and sample mass. Currently only returns counts-domain numbers and is bypassed when net area is non-positive.",
+    "approx_loc": 70
+   },
+   {
+    "path": "nuclex/nuclides/library.py",
+    "purpose": "Loads the gamma library JSON: nuclides with half_life value plus unit, gamma lines with energy, emission probability, and per-line flags (interference, true-coincidence summing, escape). Provides line selection by emission-probability threshold and flag policy. Currently assumes half-lives are in days and ignores the flags.",
+    "approx_loc": 105
+   },
+   {
+    "path": "nuclex/decay.py",
+    "purpose": "Decay constants and the correction factors: decay from count start to the sample reference datetime, and the decay-during-count integral factor. Currently applies only the first, from the count start, and silently falls back to the system clock when the reference datetime is missing.",
+    "approx_loc": 80
+   },
+   {
+    "path": "nuclex/assay.py",
+    "purpose": "Orchestration for one sample: load spectrum and background, pick calibrations, integrate each candidate line, convert to activity, decide detection, then combine per-line activities into one nuclide result. Currently divides counts by real time, applies an extra dead-time factor, and keeps only the highest-emission-probability line.",
+    "approx_loc": 175
+   },
+   {
+    "path": "nuclex/qc.py",
+    "purpose": "Quality control: reduced chi-square and Birge ratio across the lines of a nuclide, and En numbers against certified values when a certified-values CSV is supplied.",
+    "approx_loc": 70
+   },
+   {
+    "path": "nuclex/quantities.py",
+    "purpose": "Thin value-with-uncertainty helpers over uncertainties.ufloat (relative combination, weighted mean, formatting to a fixed number of significant figures for the report).",
+    "approx_loc": 60
+   },
+   {
+    "path": "nuclex/report.py",
+    "purpose": "Writes assay_report.csv (one row per sample-nuclide), assay_lines.csv (one row per sample-nuclide-line) and assay_report.json, with deterministic ordering and formatting, detection flags, MDA columns and echoed reference datetimes.",
+    "approx_loc": 120
+   },
+   {
+    "path": "nuclex/cli.py",
+    "purpose": "python -m nuclex assay --manifest ... --library ... --instrument-log ... --out-dir ... plus --certified for the QC columns; argument validation, exit codes and the batch log lines seen in logs/.",
+    "approx_loc": 125
+   },
+   {
+    "path": "scripts/check_batch.py",
+    "purpose": "Convenience wrapper the lab runs after a batch: re-runs the assay for the proficiency manifest and prints the En number table against the certified values.",
+    "approx_loc": 60
+   }
+  ],
+  "data_files": [
+   {
+    "path": "data/spectra/PT24Q2-01_D3.chn ... PT24Q2-06_D3.chn",
+    "description": "Six Ortec CHN binary spectra (8192 channels, uint32 counts, 20 ms tick live/real times, start-time header fields). Two carry the -102 calibration footer with quadratic energy and FWHM calibration; one of those is the file that currently crashes the reader. Synthesized from known activities with the protocol's forward model plus seeded Poisson noise."
+   },
+   {
+    "path": "data/spectra/BKG_D3_2024-06-01.chn",
+    "description": "Long-count detector background spectrum registered for detector D3, used for background subtraction and for the blank/non-detect samples."
+   },
+   {
+    "path": "data/spectra/PT24Q2-07_D5.spe, PT24Q2-08_D5.spe",
+    "description": "Two IAEA ASCII SPE spectra from a second detector (different efficiency calibration and geometry), including a blank."
+   },
+   {
+    "path": "data/manifests/PT-2024Q2_batch.csv",
+    "description": "Sample manifest: sample_id, spectrum file, detector, geometry, sample mass (kg), count start datetime, reference datetime for decay, background spectrum id, requested nuclides. One row deliberately has an empty reference datetime."
+   },
+   {
+    "path": "data/nuclides/gamma_library_v7.json",
+    "description": "Nuclide library: Cs-137, Co-60, Ba-133, I-131, Tc-99m, K-40, Eu-152 with half_life value plus explicit unit (s/m/h/d/y) and gamma lines carrying energy_keV, emission_probability and flags such as {\"interference\": \"Ra-226 609 keV\"} or {\"summing\": true}."
+   },
+   {
+    "path": "data/calibration/instrument_log.sqlite",
+    "description": "SQLite instrument log: detectors, efficiency_calibrations (detector, geometry, ln-ln polynomial coefficients, valid energy range, model uncertainty, valid_from/valid_to) with two calibrations for D3 (April and June), and background_registrations."
+   },
+   {
+    "path": "data/calibration/README_calibrations.md",
+    "description": "Note from the calibration engineer explaining that D3 was re-characterised in June after a preamp swap and that April/May counts must keep using the April calibration."
+   },
+   {
+    "path": "docs/specs/measurement_protocol_v4.md",
+    "description": "Normative protocol excerpt: count-rate definition (live time), dead-time policy, Covell continuum and ROI half-width in FWHM units, decay-during-count and decay-to-reference formulas, year = 365.2422 d, line-selection and flag policy, inverse-variance combination with Birge inflation, Currie L_C/L_D with k = 1.645 and the activity conversion, calibration validity rules, and the required report schema."
+   },
+   {
+    "path": "docs/formats/ortec_chn_format.md",
+    "description": "Vendor format note: CHN header layout, 20 ms tick units for live/real time, start-time encoding, and the -102 footer record with the three energy-calibration floats and three shape-calibration floats."
+   },
+   {
+    "path": "docs/tickets/RMP-2231_nonconformance.md",
+    "description": "Accreditation body nonconformance notice with the failed En numbers per sample, the assessor's three observations (half-life-correlated bias, inconsistent Ba-133 lines, blanks reported as 0 Bq) and the corrective-action deadline."
+   },
+   {
+    "path": "docs/reviews/PR-418_review.md",
+    "description": "Pull-request review thread on the change that introduced the dead-time and line-selection behaviour, with the reviewer's unresolved questions and the author's \"long-lived sources agree\" reply."
+   },
+   {
+    "path": "docs/proficiency/PT-2024Q2_certified_values.csv",
+    "description": "Provider's certified activities per sample and nuclide at the stated reference datetime, with expanded (k=2) uncertainties \u2014 the ground truth used for self-checking."
+   },
+   {
+    "path": "logs/batch_2024-06-14.log",
+    "description": "The failing batch run: per-sample result lines, the \"no peak found near 1332.50 keV\" warning, MDA=0.000 lines for the blanks, and the truncated-read traceback from the CHN reader."
+   }
+  ],
+  "pip_deps": [
+   "numpy==2.1.3",
+   "scipy==1.14.1",
+   "uncertainties==3.2.2",
+   "pytest==8.4.1"
+  ]
+ },
+ "instruction_outline": "Framed as the corrective action for nonconformance RMP-2231. It states: the lab failed the 2024-Q2 proficiency round; the assessor's notice, the protocol excerpt, the CHN format note, the PR-418 review thread, the certified values and the failing batch log are all in the workspace at named paths; docs/specs/measurement_protocol_v4.md is normative and wins over the current code wherever they disagree. The deliverable: `python -m nuclex assay --manifest data/manifests/PT-2024Q2_batch.csv --library data/nuclides/gamma_library_v7.json --instrument-log data/calibration/instrument_log.sqlite --out-dir <dir>` must run to completion on the whole batch (including the spectrum that currently crashes) and write assay_report.csv, assay_lines.csv and assay_report.json with the schema given in the protocol document; `--certified <csv>` adds the En-number QC columns. Requirements stated as observable behaviour: every reported activity must agree with the certified value within the combined expanded uncertainty (|En| <= 1); every nuclide result must combine all usable gamma lines per the protocol's selection, flag and weighting rules and report per-line detail with a used/not-used reason; samples below the decision level must be reported as non-detects with a positive MDA in the report's activity unit, never 0 or blank; results must be independent of the machine clock and reproducible byte-for-byte across runs, and a manifest row with no reference datetime must fail loudly with a non-zero exit and a message naming the sample rather than defaulting to \"now\"; the tool must keep working on both CHN and SPE inputs and on both detectors, and must use the efficiency calibration whose validity window covers the count start date. It notes the code must remain a library plus CLI (module/CLI entry point and report file names are contract), that no network is available, and that the agent may add modules but must not change the CLI contract or the report schema. It does not mention tests, hidden fixtures, solve.sh, or any assertion.",
+ "required_changes": [
+  "CHN reader: decode live time and real time from 20 ms ticks (not seconds), decode the header start datetime correctly, and parse the trailing -102 calibration footer for the quadratic energy calibration and the FWHM/shape calibration; the footer-bearing spectrum that currently raises a short-read error must load.",
+  "Energy calibration: honour the quadratic term (and the per-spectrum calibration coming from the file footer, overriding the manifest/instrument-log default) so the Co-60 1332.5 keV line lands inside its ROI instead of being reported as not found.",
+  "Count-rate and dead-time: compute peak count rates from live time only and remove the second, real/live dead-time factor applied later in the activity chain (the double correction the PR reviewer flagged).",
+  "Decay handling: apply the decay-during-count factor lam*T_real/(1-exp(-lam*T_real)) using the real elapsed count duration, and the decay-to-reference factor exp(+lam*dt) from count start to the manifest reference datetime; remove the system-clock fallback so a missing reference datetime is a hard, named error with a non-zero exit.",
+  "Nuclide library: honour the explicit half-life unit field (s/m/h/d/y with year = 365.2422 d) instead of assuming days, and expose the per-line flags.",
+  "Peak integration: build the ROI from the expected energy and the FWHM model at the protocol's half-width, estimate the continuum with the Covell symmetric method over the specified side channels, subtract the live-time-scaled background spectrum, and propagate the correct net-area uncertainty (gross plus continuum plus background terms).",
+  "Detection limits: compute the Currie decision level and detection limit and convert L_D to an activity MDA in the report's unit through efficiency, emission probability, live time, both decay factors and sample mass; report non-detects with detected=false and a positive finite MDA instead of 0/None, and never bypass the path when the net area is non-positive.",
+  "Line combination: select lines by the protocol's emission-probability threshold and flag policy (excluding interference/summing-flagged lines), combine the usable per-line activities by inverse-variance weighting, inflate the combined uncertainty by the Birge ratio when reduced chi-square exceeds 1, and record every candidate line with its usage decision.",
+  "Calibration selection: choose the efficiency calibration from the SQLite instrument log by detector, geometry and the validity window covering the count start datetime (not the newest record), and flag/refuse lines whose energy falls outside the selected calibration's validity range.",
+  "Report: emit the protocol's per-sample and per-line schemas in both CSV and JSON with deterministic ordering and formatting, echoing the reference datetime, detection flag, MDA, combination statistics and, when --certified is given, the En numbers."
+ ],
+ "solution_plan": [
+  {
+   "file": "nuclex/io/chn.py",
+   "change": "Rewrite the header struct decode (tick-scaled live/real times, start datetime), compute the counts block length from the channel count, and add the -102 footer parser returning energy and shape calibration triples attached to the Spectrum.",
+   "approx_loc_changed": 55
+  },
+  {
+   "file": "nuclex/calibration/energy.py",
+   "change": "Use the full quadratic form in both directions (energy_to_channel by inversion/bisection), add the FWHM(E) model evaluation, and let a spectrum-embedded calibration take precedence over the default.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "nuclex/inventory/calstore.py",
+   "change": "Replace the newest-record lookup with a detector+geometry+date-window query, raise a clear error when no calibration covers the count date, and expose the validity energy range and model uncertainty.",
+   "approx_loc_changed": 30
+  },
+  {
+   "file": "nuclex/nuclides/library.py",
+   "change": "Parse half_life value+unit into seconds with the protocol's year length, surface line flags, and implement the emission-probability/flag-based line selection policy.",
+   "approx_loc_changed": 32
+  },
+  {
+   "file": "nuclex/analysis/peaks.py",
+   "change": "Replace fixed-width ROI and flat baseline with FWHM-derived ROI bounds, Covell symmetric continuum over the specified side channels, live-time-scaled background subtraction, and full net-area uncertainty propagation.",
+   "approx_loc_changed": 60
+  },
+  {
+   "file": "nuclex/analysis/detect.py",
+   "change": "Add the Currie L_C/L_D counts-domain formulas with k=1.645 and the counts-to-Bq conversion folding efficiency, emission probability, live time, both decay factors and mass; always compute even for non-positive net areas.",
+   "approx_loc_changed": 40
+  },
+  {
+   "file": "nuclex/decay.py",
+   "change": "Add the decay-during-count integral factor on real time, fix the decay-to-reference direction and epoch, and remove the datetime.now fallback in favour of an explicit error.",
+   "approx_loc_changed": 35
+  },
+  {
+   "file": "nuclex/assay.py",
+   "change": "Rework the per-sample pipeline: live-time rates with no second dead-time factor, per-line activity with both decay factors, per-line detection decision, and inverse-variance combination with Birge inflation over all usable lines, carrying per-line usage reasons.",
+   "approx_loc_changed": 85
+  },
+  {
+   "file": "nuclex/qc.py",
+   "change": "Add reduced chi-square/Birge ratio helpers used by the combination and the En-number computation against the certified CSV.",
+   "approx_loc_changed": 18
+  },
+  {
+   "file": "nuclex/report.py",
+   "change": "Emit the per-line CSV, add detection/MDA/combination/reference-datetime columns to the sample report and JSON, and fix ordering and numeric formatting for reproducibility.",
+   "approx_loc_changed": 42
+  },
+  {
+   "file": "nuclex/cli.py",
+   "change": "Wire the new calibration selection and certified-values option, propagate the missing-reference-datetime failure to a non-zero exit with a named message, and keep the log lines consistent.",
+   "approx_loc_changed": 25
+  }
+ ],
+ "estimated_total_loc_changed": 452,
+ "test_strategy": {
+  "approach": "Hidden pytest suites drive the public CLI and library API on two datasets: the visible /app batch and a hidden alternative batch in tests/fixtures/alt_batch/ (different detector geometry, different nuclide mix \u2014 including a 6-hour-half-life nuclide counted for two half-lives \u2014 different calibration windows and different certified values), generated by the same forward model but never present in the image. Every assertion reads observable artefacts: the report CSV/JSON files, exit codes and stderr text, or the documented library entry points. Ground truth is the certified-values CSV produced when the spectra were synthesized from known activities, so tests compare against the physics that made the data, not against the reference implementation's numbers. A tests/oracle.py re-implements the CHN header/footer decode independently from the vendor format note to check live/real times and calibration recovery.",
+  "invariants_checked": [
+   "Every sample-nuclide result in both the visible and hidden batches agrees with its certified activity within the combined expanded uncertainty (|En| <= 1), with a floor tolerance of max(3 sigma_counting, 1.5%).",
+   "Half-life sensitivity: the short-lived nuclide counted for ~2 half-lives (hidden batch) is within tolerance, unreachable without both the decay-during-count and decay-to-reference factors; the long-lived nuclide stays within tolerance too, so a symptom patch that only rescales short-lived results fails.",
+   "Live-time invariance: for a fixture pair of spectra differing only in dead time (same true activity, different live/real ratio), reported activities agree within 1% \u2014 fails under either a missing or a doubled dead-time correction.",
+   "Multi-line consistency: for the multi-line nuclide, all lines marked used agree pairwise within their uncertainties, the combined value lies between the min and max used-line values, and the combined uncertainty is <= the smallest used-line uncertainty and >= that value divided by sqrt(number of used lines).",
+   "Flag policy: the line flagged as interfered/summing appears in the per-line report marked not used, and removing it from the library leaves the combined result unchanged within tolerance.",
+   "Non-detects: blank samples report detected=false with a strictly positive finite MDA in the report unit; across two blanks differing only in live time the MDA ratio matches the 1/sqrt(t) expectation within 15%; MDA is never 0 or null.",
+   "Calibration validity: an April-counted sample's result matches its certified value, which is only possible with the April efficiency calibration (the June record differs by a known ~9% efficiency step).",
+   "Reader robustness: the footer-bearing spectrum loads, and its live time, real time, channel count and recovered quadratic energy coefficients match the independent oracle decode within 1e-6; the Co-60 1332.5 keV line appears as a detected line in the report.",
+   "Format parity: the SPE-sourced samples produce results within tolerance on the same code path as the CHN-sourced ones.",
+   "Determinism and clock independence: two consecutive CLI runs produce byte-identical report files; a run with a shifted container date/TZ produces the same values; the manifest row with an empty reference datetime causes a non-zero exit whose message names that sample_id, with no partial report emitted for it.",
+   "Schema conformance: required columns exist in both CSVs and the JSON, row ordering is stable, and En columns appear only when --certified is passed."
+  ],
+  "anti_overfit_measures": [
+   "A hidden alternative batch with different spectra, nuclides, calibrations and certified values makes per-sample hardcoding useless.",
+   "Ground truth comes from the activities used to synthesize the spectra (an independent forward model), not from running the reference solution.",
+   "Tolerance bands derived from counting statistics and the certified expanded uncertainties, not exact float equality.",
+   "Property-style checks (live-time invariance, MDA vs live-time scaling, combined-uncertainty bounds, line consistency) that any correct implementation satisfies regardless of code structure.",
+   "No assertions on function or class names beyond the CLI entry point and the report file names/columns that instruction.md declares as contract; internal refactors are free.",
+   "The CHN checks use a test-local decoder written from the vendor format note, so a differently structured reader still passes.",
+   "Combination is checked by mathematical properties plus agreement with certified values, so an implementation using a different but protocol-compliant ROI half-width or combination arithmetic still passes."
+  ],
+  "pre_apply_failure_reason": "Pre-apply the CLI aborts on the footer-bearing CHN spectrum (short read), so the batch report is incomplete; short-lived nuclides are biased by roughly the missing decay-during-count and doubled dead-time factors (tens of percent, far outside |En| <= 1); Ba-133 lines disagree and only one line is reported; the 1332 keV Co-60 line is missing; blanks report MDA 0.0; the April sample uses the June calibration; and the empty-reference-datetime row is silently filled from the system clock instead of failing. At least a dozen assertions fail across both batches."
+ },
+ "difficulty_rationale": "The failing symptoms are individually plausible to patch and individually wrong to patch. A mid-tier model typically fixes the crash, then rescales the short-lived results by a fudge factor or applies a decay correction using live time instead of real time, and stops \u2014 but the certified values only reconcile when the count rate uses live time, the decay-during-count factor uses real time, and the redundant dead-time factor two modules away is removed; getting two of those three right still leaves a bias. It must also notice that the quadratic energy calibration only becomes available once the CHN footer is parsed (a format detail documented in the workspace but unused by the current code), that half-life units are declared in a field the parser ignores, that the efficiency calibration must be chosen by date window rather than recency, and that the Currie path must convert L_D through the same efficiency/branching/decay chain as the activity. The per-line combination requires reading the protocol's selection, flag and Birge-inflation rules and reporting per-line provenance. That is at least seven interacting root causes spread over ten modules, each visible only by cross-reading the ticket, the PR review, the protocol and the log. A frontier model can finish in one session because every formula, unit convention, format field and validity rule is written down in the workspace, and the certified-values CSV plus the batch log give an immediate, self-serve feedback loop for verifying the fix before submitting.",
+ "determinism_notes": "All spectra are committed binary/ASCII blobs generated once with a fixed numpy seed and high counting statistics (>= 40k net counts in the primary peaks, ~0.5% counting precision); nothing is generated at build or run time. No network is used; all dependencies are pinned manylinux/pure-Python wheels installed at image build. Every datetime used by the pipeline comes from spectrum headers and the manifest, and the corrected code has no system-clock path at all \u2014 a determinism test compares two runs byte-for-byte and a third run under a shifted container date/TZ. Detection thresholds use the fixed k = 1.645 constant from the protocol rather than runtime-configured values, and no test depends on floating-point exactness: all numeric assertions use uncertainty-derived tolerance bands. Report ordering is fixed by (sample_id, nuclide, energy) sorting, which the schema section of the protocol states.",
+ "risks": [
+  "Synthesizing CHN spectra that are realistic and that reproduce the certified activities to within the stated uncertainties takes care; mitigate by writing the forward model (efficiency, branching, decay, dead time, continuum, Poisson noise) once in a generator under tests/tools, deriving the certified CSV from its inputs, and verifying the reference solution recovers them before freezing the blobs.",
+  "Too many defects could push the task past one implementer session; mitigate by keeping peak analysis closed-form (Covell summation, no non-linear fitting) and capping the batch at eight samples and seven nuclides.",
+  "Tolerance bands set too tight would fail equally valid ROI or continuum-width choices; mitigate by sizing tolerances from the certified expanded uncertainties plus a 1.5% floor and by validating against a deliberately different second implementation (different ROI half-width within the protocol's allowed range) before acceptance.",
+  "The visible certified-values CSV invites hardcoding; mitigated by the hidden alternative batch, which must exercise the same code paths (both file formats, both detectors, a blank, a short-lived nuclide, a date-window calibration choice) or the anti-overfit protection is incomplete.",
+  "uncertainties and scipy must genuinely earn their place; if the final reference solution stops needing scipy, drop it from the pinned deps rather than leaving an unused dependency in the Dockerfile.",
+  "The instruction must state the CLI contract and report schema precisely enough that tests add no hidden requirements \u2014 particularly the non-detect representation and the missing-reference-datetime failure behaviour."
+ ]
+}
