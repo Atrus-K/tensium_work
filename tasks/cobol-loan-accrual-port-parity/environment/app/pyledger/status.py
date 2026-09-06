@@ -1,15 +1,7 @@
 """Delinquency status letter (3600-SET-STATUS).
 
-    EVALUATE TRUE
-        WHEN WS-DAYS-LATE > 90              MOVE 'W' TO LO-STATUS   (write-off referral)
-        WHEN WS-DAYS-LATE > 60              MOVE 'X' TO LO-STATUS   (severely delinquent)
-        WHEN WS-DAYS-LATE > 30              MOVE 'D' TO LO-STATUS   (delinquent)
-        WHEN WS-DAYS-LATE > LM-GRACE-DAYS   MOVE 'L' TO LO-STATUS   (late, past grace)
-        WHEN OTHER                          MOVE 'C' TO LO-STATUS   (current)
-    END-EVALUATE
-
-EVALUATE takes the first WHEN that is true, so the thresholds are tested from the
-most severe downwards and every comparison is strict.
+Buckets: C current, L late, D delinquent (30+), X severely delinquent (60+),
+W write-off referral (90+).
 """
 from __future__ import annotations
 
@@ -19,17 +11,14 @@ STATUS_DELINQUENT = "D"
 STATUS_SEVERE = "X"
 STATUS_WRITEOFF = "W"
 
-LADDER = (
-    (90, STATUS_WRITEOFF),
-    (60, STATUS_SEVERE),
-    (30, STATUS_DELINQUENT),
-)
-
 
 def status_letter(days_late: int, grace_days: int) -> str:
-    for threshold, letter in LADDER:
-        if days_late > threshold:
-            return letter
-    if days_late > grace_days:
-        return STATUS_LATE
-    return STATUS_CURRENT
+    if days_late == 0:
+        return STATUS_CURRENT
+    if days_late >= 90:
+        return STATUS_WRITEOFF
+    if days_late >= 60:
+        return STATUS_SEVERE
+    if days_late >= 30:
+        return STATUS_DELINQUENT
+    return STATUS_LATE

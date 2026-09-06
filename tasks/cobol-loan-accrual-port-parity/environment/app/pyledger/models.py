@@ -40,7 +40,6 @@ class Account:
     payment_due: Decimal
     grace_days: int
     branch: str
-    waive_late_fee: bool
     officer: str
 
     @property

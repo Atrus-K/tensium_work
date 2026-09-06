@@ -26,12 +26,15 @@ _ALPHA_RE = re.compile(r"^X(?:\((\d+)\))?$")
 
 _POS_OVERPUNCH = "{ABCDEFGHI"
 _NEG_OVERPUNCH = "}JKLMNOPQR"
-_DECODE_OVERPUNCH: dict[str, tuple[int, int]] = {}
+# Overpunch character -> digit.  Both zone tables are accepted so a stray negative
+# zone never aborts a run; the sign itself is not carried because loan balances and
+# payment amounts are never negative (see PR-218).
+_DECODE_OVERPUNCH: dict[str, int] = {}
 for _d in range(10):
-    _DECODE_OVERPUNCH[_POS_OVERPUNCH[_d]] = (_d, 1)
-    _DECODE_OVERPUNCH[_NEG_OVERPUNCH[_d]] = (_d, -1)
-    # some transfer profiles leave an unsigned zone on the last digit: treat as positive
-    _DECODE_OVERPUNCH[str(_d)] = (_d, 1)
+    _DECODE_OVERPUNCH[_POS_OVERPUNCH[_d]] = _d
+    _DECODE_OVERPUNCH[_NEG_OVERPUNCH[_d]] = _d
+    # some transfer profiles leave an unsigned zone on the last digit
+    _DECODE_OVERPUNCH[str(_d)] = _d
 
 
 def _count_nines(spec: str) -> int:
@@ -114,8 +117,8 @@ def decode_display(raw: bytes, pic: Pic) -> Decimal:
     body, last = text[:-1], text[-1]
     if not body.isdigit() or last not in _DECODE_OVERPUNCH:
         raise ValueError(f"bad zoned decimal field {text!r}")
-    digit, sign = _DECODE_OVERPUNCH[last]
-    return sign * _place_point(body + str(digit), pic.scale)
+    digit = _DECODE_OVERPUNCH[last]
+    return _place_point(body + str(digit), pic.scale)
 
 
 def encode_display(value: Decimal, pic: Pic) -> bytes:
@@ -123,8 +126,7 @@ def encode_display(value: Decimal, pic: Pic) -> bytes:
     digits = _digits_of(fitted, pic)
     if not pic.signed:
         return digits.encode("ascii")
-    table = _NEG_OVERPUNCH if fitted < 0 else _POS_OVERPUNCH
-    return (digits[:-1] + table[int(digits[-1])]).encode("ascii")
+    return (digits[:-1] + _POS_OVERPUNCH[int(digits[-1])]).encode("ascii")
 
 
 def _place_point(digits: str, scale: int) -> Decimal:

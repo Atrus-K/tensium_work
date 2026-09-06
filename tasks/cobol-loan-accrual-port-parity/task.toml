@@ -1,0 +1,24 @@
+schema_version = "1.4"
+
+[task]
+name = "tensium/cobol-loan-accrual-port-parity"
+version = "1.0.0"
+description = "Bring pyledger, the Python port of mainframe COBOL batch LNACCR01, to byte-exact parity with the mainframe's LNOUT output by fixing the port's COBOL-semantics defects (numeric, zoned-decimal, date and business-rule handling)."
+keywords = ["python", "cross-language-migration", "cobol", "mainframe", "fixed-width", "decimal-arithmetic", "banking"]
+
+[metadata]
+category = "rewriting / cross-language migration"
+difficulty = "hard"
+source = "manually constructed by domain experts; evidence trail in environment/app/legacy (COBOL source, copybooks, JCL), environment/app/docs (ticket, PR review, transfer notes), environment/app/logs/recon and environment/app/CHANGELOG.md"
+
+[verifier]
+timeout_sec = 600.0
+
+[agent]
+timeout_sec = 2700.0
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 2
+memory_mb = 2048
+storage_mb = 4096

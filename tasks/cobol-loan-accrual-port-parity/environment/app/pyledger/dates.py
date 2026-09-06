@@ -1,7 +1,6 @@
 """Date handling mirroring the LNACCR01 date paragraphs.
 
-* YYMMDD fields use the program's century window (2000-CENTURY-WINDOW):
-  a two-digit year above 49 belongs to the 1900s, otherwise to the 2000s.
+* YYMMDD fields are expanded to the 2000s (all live dates in this job are recent).
 * Day differences use FUNCTION INTEGER-OF-DATE arithmetic (exclusive: the
   difference between a date and the following day is 1).
 * Mortgage products accrue on a 30/360 (US) basis (2300-DAYS-360); other products
@@ -15,14 +14,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-CENTURY_PIVOT = 49  # YY > 49 -> 19YY, else 20YY
-
-
 def from_yymmdd(value: Decimal | int | str) -> date:
     text = f"{int(value):06d}"
     yy, mm, dd = int(text[0:2]), int(text[2:4]), int(text[4:6])
-    century = 1900 if yy > CENTURY_PIVOT else 2000
-    return date(century + yy, mm, dd)
+    return date(2000 + yy, mm, dd)
 
 
 def parse_asof(text: str) -> date:
@@ -50,12 +45,11 @@ def days_between(start: date, end: date) -> int:
 
 
 def days_360(start: date, end: date) -> int:
-    """30/360 US day count with both end-of-month clamps."""
+    """30/360 US day count."""
     d1, d2 = start.day, end.day
     if d1 == 31:
         d1 = 30
-    if d2 == 31 and d1 >= 30:
-        d2 = 30
+    # Verified against the October sample (all month-end accrual dates).
     return 360 * (end.year - start.year) + 30 * (end.month - start.month) + (d2 - d1)
 
 
