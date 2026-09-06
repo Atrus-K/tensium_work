@@ -1,0 +1,45 @@
+docker build -f tasks/claims-adjudication-audit-recalc/environment/Dockerfile -t tbval/claims-adjudication-audit-recalc:validate-envctx --network=host --build-arg=HTTPS_PROXY=http://127.0.0.1:34087 tasks/claims-adjudication-audit-recalc/environment
+
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 617B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/python:3.11-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/5] FROM docker.io/library/python:3.11-slim@sha256:dcaafb8a9924496bd05a92b465c1e477cb89361bedd64ae10c6387a37668d2d5
+#4 resolve docker.io/library/python:3.11-slim@sha256:dcaafb8a9924496bd05a92b465c1e477cb89361bedd64ae10c6387a37668d2d5 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 85.25kB done
+#5 DONE 0.0s
+
+#6 [3/5] WORKDIR /app
+#6 CACHED
+
+#7 [4/5] COPY . /tmp/ctx
+#7 CACHED
+
+#8 [2/5] RUN pip install --no-cache-dir pytest==8.4.1
+#8 CACHED
+
+#9 [5/5] RUN set -e;     if [ -d /tmp/ctx/environment/app ]; then SRC=/tmp/ctx/environment/app; else SRC=/tmp/ctx/app; fi;     cp -a "$SRC/." /app/ && rm -rf /tmp/ctx &&     find /app -name __pycache__ -type d -prune -exec rm -rf {} + &&     python -m tessera.cli build-db --data /app/data --out /app/data/claims.db
+#9 CACHED
+
+#10 exporting to image
+#10 exporting layers done
+#10 exporting manifest sha256:6f310588decef0880df4ff21dbd08e0c89696ca5b68866c61103f9d442eab719 done
+#10 exporting config sha256:3e3adf095b2b22a2ede4128ffed62c2dc0fa3d72c5d9a234f98c3ddbdc216faf done
+#10 exporting attestation manifest sha256:eaac60a0057e113f2609cc06cb3c3bfcf477a36f327bebcc09d5c8b974b343eb
+#10 exporting attestation manifest sha256:eaac60a0057e113f2609cc06cb3c3bfcf477a36f327bebcc09d5c8b974b343eb 0.0s done
+#10 exporting manifest list sha256:a1ade350847f3c95ec7c32382a8ce1ab9c67cc37ef5bb60e79ef8edef1361850 done
+#10 naming to docker.io/tbval/claims-adjudication-audit-recalc:validate-envctx done
+#10 unpacking to docker.io/tbval/claims-adjudication-audit-recalc:validate-envctx 0.0s done
+#10 DONE 0.1s

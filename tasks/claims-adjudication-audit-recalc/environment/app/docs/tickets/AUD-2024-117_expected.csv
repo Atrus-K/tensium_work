@@ -1,0 +1,8 @@
+claim_id,policy_version_id,status,gross_acv,sublimit_reduction,deductible_applied,indemnity,days_late,interest
+CLM-24-0601,PV-1001-A,paid,4787.00,0.00,1000.00,3787.00,20,37.35
+CLM-24-0603,,no_coverage,0.00,0.00,0.00,0.00,0,0.00
+CLM-24-0604,PV-1003-A,paid,12645.00,0.00,12000.00,645.00,0,0.00
+CLM-24-0606,PV-1005-A,paid,4143.33,1050.00,1000.00,2093.33,0,0.00
+CLM-24-0607,PV-1006-A,paid,2390.00,550.00,0.00,1840.00,17,10.28
+CLM-24-0613,PV-1013-A,paid,5782.50,0.00,1000.00,4782.50,0,0.00
+CLM-24-0617,PV-1015-A,paid,7180.00,0.00,0.00,3000.00,3,2.22

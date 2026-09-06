@@ -1,0 +1,255 @@
+{
+  "tasks": [
+    {
+      "task": "claims-adjudication-audit-recalc",
+      "passed": true,
+      "image": "tbval/claims-adjudication-audit-recalc:validate",
+      "loc_changed": 447,
+      "files_changed": 10,
+      "solve_seconds": 0.4,
+      "pre_apply": {
+        "exit_code": 1,
+        "seconds": 2.3,
+        "reward": "0",
+        "pytest": {
+          "failed": 48,
+          "passed": 14,
+          "collected": 62
+        }
+      },
+      "post_apply": {
+        "exit_code": 0,
+        "seconds": 2.2,
+        "reward": "1",
+        "pytest": {
+          "passed": 62,
+          "collected": 62
+        }
+      },
+      "checks": [
+        {
+          "name": "dir-name-charset",
+          "passed": true,
+          "detail": "claims-adjudication-audit-recalc"
+        },
+        {
+          "name": "file-present:instruction.md",
+          "passed": true,
+          "detail": "instruction.md"
+        },
+        {
+          "name": "file-present:task.toml",
+          "passed": true,
+          "detail": "task.toml"
+        },
+        {
+          "name": "file-present:environment/Dockerfile",
+          "passed": true,
+          "detail": "environment/Dockerfile"
+        },
+        {
+          "name": "file-present:solution/solve.sh",
+          "passed": true,
+          "detail": "solution/solve.sh"
+        },
+        {
+          "name": "file-present:tests/test.sh",
+          "passed": true,
+          "detail": "tests/test.sh"
+        },
+        {
+          "name": "toml-parses",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "toml-numeric:environment.cpus",
+          "passed": true,
+          "detail": "2"
+        },
+        {
+          "name": "toml-numeric:environment.memory_mb",
+          "passed": true,
+          "detail": "2048"
+        },
+        {
+          "name": "toml-numeric:environment.storage_mb",
+          "passed": true,
+          "detail": "4096"
+        },
+        {
+          "name": "toml-numeric:environment.build_timeout_sec",
+          "passed": true,
+          "detail": "900.0"
+        },
+        {
+          "name": "toml-numeric:verifier.timeout_sec",
+          "passed": true,
+          "detail": "600.0"
+        },
+        {
+          "name": "toml-numeric:agent.timeout_sec",
+          "passed": true,
+          "detail": "2700.0"
+        },
+        {
+          "name": "toml-no-secrets",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "toml-harbor-schema",
+          "passed": true,
+          "detail": "ok"
+        },
+        {
+          "name": "bash-n:solution/solve.sh",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "bash-n:tests/test.sh",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "test.sh-writes-reward",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "test.sh-reward-not-hardcoded",
+          "passed": true,
+          "detail": "must write 1 on success and 0 on failure conditionally"
+        },
+        {
+          "name": "test.sh-runs-real-tests",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "solve.sh-does-not-touch-verifier",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "instruction-nonempty",
+          "passed": true,
+          "detail": "5203 chars"
+        },
+        {
+          "name": "instruction-no-verifier-leak",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "instruction-no-network-deps",
+          "passed": true,
+          "detail": "urls: []"
+        },
+        {
+          "name": "dockerfile-no-tests-solution-copy",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "dockerignore-excludes-tests-solution",
+          "passed": true,
+          "detail": "COPY . used; .dockerignore must list tests/ and solution/"
+        },
+        {
+          "name": "docker-build(task-root-context)",
+          "passed": true,
+          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc/claims-adjudication-audit-recalc.build-root.log"
+        },
+        {
+          "name": "docker-build(environment-context, as Harbor builds it)",
+          "passed": true,
+          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc/claims-adjudication-audit-recalc.build-env.log"
+        },
+        {
+          "name": "image-has-no-tests-or-solution",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "pre-apply:test.sh-exit-nonzero",
+          "passed": true,
+          "detail": "1"
+        },
+        {
+          "name": "pre-apply:reward==0",
+          "passed": true,
+          "detail": "'0'"
+        },
+        {
+          "name": "pre-apply:at-least-one-test-fails",
+          "passed": true,
+          "detail": "{\"failed\": 48, \"passed\": 14, \"collected\": 62}"
+        },
+        {
+          "name": "pre-apply:tests-collected",
+          "passed": true,
+          "detail": "{\"failed\": 48, \"passed\": 14, \"collected\": 62}"
+        },
+        {
+          "name": "post-apply:solve.sh-exit-zero",
+          "passed": true,
+          "detail": "exit=0 in 0s"
+        },
+        {
+          "name": "post-apply:solve.sh-within-agent-timeout",
+          "passed": true,
+          "detail": "0s < 2700s"
+        },
+        {
+          "name": "post-apply:solve.sh-did-not-write-reward",
+          "passed": true,
+          "detail": "None"
+        },
+        {
+          "name": "post-apply:changes-span-multiple-files",
+          "passed": true,
+          "detail": "files_changed=10"
+        },
+        {
+          "name": "post-apply:loc-changed>100",
+          "passed": true,
+          "detail": "loc_changed=447"
+        },
+        {
+          "name": "post-apply:test.sh-exit-zero",
+          "passed": true,
+          "detail": "0"
+        },
+        {
+          "name": "post-apply:reward==1",
+          "passed": true,
+          "detail": "'1'"
+        },
+        {
+          "name": "post-apply:all-tests-pass",
+          "passed": true,
+          "detail": "{\"passed\": 62, \"collected\": 62}"
+        },
+        {
+          "name": "post-apply:tests-collected-not-all-skipped",
+          "passed": true,
+          "detail": "{\"passed\": 62, \"collected\": 62}"
+        },
+        {
+          "name": "post-apply:test.sh-within-verifier-timeout",
+          "passed": true,
+          "detail": "2.2s"
+        }
+      ]
+    }
+  ],
+  "n_tasks": 1,
+  "n_pre_apply_fail_ok": 1,
+  "n_post_apply_pass_ok": 1,
+  "anomalous_tasks": [],
+  "loc_changed_p25": 447.0,
+  "loc_changed_p25_gt_100": true,
+  "all_passed": true
+}

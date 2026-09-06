@@ -1,0 +1,109 @@
+item_id,claim_id,category,description,rcv,purchase_date
+LI-0001,CLM-24-0217,jewelry,gold bracelet,1200.00,2019-06-12
+LI-0002,CLM-24-0217,electronics,desktop computer,5125.00,2023-02-01
+LI-0003,CLM-24-0217,furniture,dining set,2800.00,2023-06-05
+LI-0004,CLM-24-0305,furniture,living room set,24000.00,2022-09-01
+LI-0005,CLM-24-0305,electronics,home theatre,9800.00,2023-01-15
+LI-0006,CLM-24-0305,appliances,kitchen appliances,16500.00,2021-03-10
+LI-0007,CLM-24-0305,clothing,wardrobe,18000.00,2022-01-01
+LI-0008,CLM-24-0305,art,framed prints,3200.00,2018-05-05
+LI-0009,CLM-24-0412,jewelry,diamond earrings,1900.00,2020-12-20
+LI-0010,CLM-24-0412,electronics,tablet,899.00,2023-09-10
+LI-0011,CLM-24-0601,electronics,laptop,2400.00,2023-03-15
+LI-0012,CLM-24-0601,electronics,camera,1650.00,2022-11-02
+LI-0013,CLM-24-0601,jewelry,watch,1100.00,2021-07-04
+LI-0014,CLM-24-0601,cash,cash from safe,180.00,2024-05-01
+LI-0015,CLM-24-0601,tools,cordless drill set,640.00,2022-05-20
+LI-0016,CLM-24-0602,furniture,sofa,3200.00,2022-12-01
+LI-0017,CLM-24-0602,electronics,television,1800.00,2023-12-01
+LI-0018,CLM-24-0602,books_media,book collection,950.00,2015-06-01
+LI-0019,CLM-24-0603,electronics,gaming console,560.00,2023-10-10
+LI-0020,CLM-24-0603,jewelry,necklace,900.00,2018-02-14
+LI-0021,CLM-24-0603,clothing,leather jacket,420.00,2023-01-10
+LI-0022,CLM-24-0616,furniture,bedroom set,4100.00,2021-04-30
+LI-0023,CLM-24-0616,appliances,washer,1290.00,2020-10-31
+LI-0024,CLM-24-0604,furniture,patio furniture,6800.00,2021-06-01
+LI-0025,CLM-24-0604,electronics,outdoor speakers,2150.00,2022-03-08
+LI-0026,CLM-24-0604,sporting_goods,kayaks,3600.00,2020-06-08
+LI-0027,CLM-24-0604,tools,garage tools,7900.00,2016-06-08
+LI-0028,CLM-24-0604,appliances,chest freezer,1400.00,2023-12-08
+LI-0029,CLM-24-0605,furniture,deck furniture,2250.00,2023-03-03
+LI-0030,CLM-24-0605,electronics,weather station,480.00,2023-09-03
+LI-0031,CLM-24-0605,sporting_goods,trampoline,1150.00,2022-06-03
+LI-0032,CLM-24-0606,jewelry,wedding ring,900.00,2016-09-24
+LI-0033,CLM-24-0606,jewelry,gold chain,800.00,2019-11-30
+LI-0034,CLM-24-0606,jewelry,pearl earrings,700.00,2021-02-14
+LI-0035,CLM-24-0606,cash,cash,350.00,2024-06-01
+LI-0036,CLM-24-0606,electronics,laptop,1900.00,2023-02-02
+LI-0037,CLM-24-0607,jewelry,signet ring (found missing),600.00,2015-08-08
+LI-0038,CLM-24-0607,electronics,television,1500.00,2022-12-17
+LI-0039,CLM-24-0607,furniture,bookcase,800.00,2022-02-17
+LI-0040,CLM-24-0608,furniture,kitchen table,1450.00,2022-05-10
+LI-0041,CLM-24-0608,appliances,microwave,310.00,2023-05-10
+LI-0042,CLM-24-0608,electronics,smart speaker,199.00,2024-01-10
+LI-0043,CLM-24-0609,jewelry,bracelet,1800.00,2017-03-03
+LI-0044,CLM-24-0609,jewelry,ring,1200.00,2020-08-08
+LI-0045,CLM-24-0609,firearms,hunting rifle,2100.00,2021-11-25
+LI-0046,CLM-24-0609,firearms,shotgun,1300.00,2023-11-25
+LI-0047,CLM-24-0610,furniture,hardwood cabinet,3300.00,2021-01-20
+LI-0048,CLM-24-0610,books_media,records,1240.00,2019-04-20
+LI-0049,CLM-24-0610,electronics,turntable,720.00,2023-10-20
+LI-0050,CLM-24-0619,furniture,outdoor dining set,2600.00,2022-06-05
+LI-0051,CLM-24-0619,electronics,security cameras,1240.00,2023-12-05
+LI-0052,CLM-24-0611,furniture,area rugs,2100.00,2022-11-18
+LI-0053,CLM-24-0611,electronics,sound system,2750.00,2021-05-18
+LI-0054,CLM-24-0611,books_media,dvd collection,600.00,2012-05-18
+LI-0055,CLM-24-0612,jewelry,gold watch,3100.00,2019-05-19
+LI-0056,CLM-24-0612,electronics,drone,1350.00,2023-08-19
+LI-0057,CLM-24-0612,clothing,designer coats,2200.00,2022-11-19
+LI-0058,CLM-24-0613,electronics,laptop,2100.00,2023-11-10
+LI-0059,CLM-24-0613,clothing,clothing,1600.00,2024-01-15
+LI-0060,CLM-24-0613,furniture,dresser,1250.00,2023-12-10
+LI-0061,CLM-24-0613,appliances,refrigerator,2400.00,2009-03-05
+LI-0062,CLM-24-0613,furniture,nightstand,300.00,2023-12-11
+LI-0063,CLM-24-0614,electronics,smartphone,1100.00,2023-06-04
+LI-0064,CLM-24-0614,tools,power tools,700.00,2022-06-04
+LI-0065,CLM-24-0614,clothing,jackets,360.00,2024-03-04
+LI-0066,CLM-24-0615,electronics,laptop (found missing),2000.00,2023-12-04
+LI-0067,CLM-24-0615,sporting_goods,bicycle,500.00,2023-06-04
+LI-0068,CLM-24-0617,furniture,garage cabinets,5200.00,2021-03-05
+LI-0069,CLM-24-0617,tools,workbench tools,3100.00,2020-03-05
+LI-0070,CLM-24-0617,sporting_goods,golf clubs,2400.00,2022-03-05
+LI-0071,CLM-24-0618,electronics,laptop,1500.00,2023-03-20
+LI-0072,CLM-24-0618,jewelry,bracelet,700.00,2019-03-20
+LI-0073,CLM-24-0620,furniture,patio set,5800.00,2022-06-12
+LI-0074,CLM-24-0620,electronics,outdoor tv,2300.00,2023-06-12
+LI-0075,CLM-24-0620,sporting_goods,grill and smoker,1900.00,2021-06-12
+LI-0076,CLM-24-0621,furniture,side table,100.30,2023-12-15
+LI-0077,CLM-24-0621,tools,hand tools,200.20,2023-09-15
+LI-0078,CLM-24-0621,furniture,sectional sofa,4300.00,2020-06-15
+LI-0079,CLM-24-0621,electronics,laptop,1700.00,2022-12-15
+LI-0080,CLM-24-0621,books_media,cookbooks,260.00,2021-06-15
+LI-0081,CLM-24-0622,furniture,lanai furniture,9500.00,2022-05-19
+LI-0082,CLM-24-0622,electronics,pool electronics,3200.00,2021-05-19
+LI-0083,CLM-24-0622,appliances,outdoor kitchen,4800.00,2020-05-19
+LI-0084,CLM-24-0623,furniture,basement furniture,3300.00,2019-06-01
+LI-0085,CLM-24-0623,electronics,treadmill console,900.00,2023-06-01
+LI-0086,CLM-24-0623,books_media,board games,240.00,2023-03-01
+LI-0087,CLM-24-0624,jewelry,sapphire ring,1600.00,2018-06-07
+LI-0088,CLM-24-0624,jewelry,tennis bracelet,1400.00,2020-06-07
+LI-0089,CLM-24-0624,electronics,laptop,2200.00,2023-03-07
+LI-0090,CLM-24-0624,cash,cash,500.00,2024-06-01
+LI-0091,CLM-24-0625,furniture,patio furniture and pergola,9600.00,2023-06-13
+LI-0092,CLM-24-0625,electronics,outdoor speakers,1500.00,2022-06-13
+LI-0093,CLM-24-0625,sporting_goods,basketball hoop,700.00,2020-06-13
+LI-0094,CLM-24-0626,electronics,laptop,2600.00,2023-06-01
+LI-0095,CLM-24-0626,electronics,tablet,900.00,2024-01-01
+LI-0096,CLM-24-0626,jewelry,bracelet,1300.00,2017-06-01
+LI-0097,CLM-24-0626,cash,cash,260.00,2024-05-30
+LI-0098,CLM-24-0627,firearms,rifle,2200.00,2022-05-28
+LI-0099,CLM-24-0627,firearms,pistol,900.00,2023-02-28
+LI-0100,CLM-24-0627,electronics,laptop,1400.00,2023-11-28
+LI-0101,CLM-24-0628,appliances,range,1800.00,2022-06-09
+LI-0102,CLM-24-0628,furniture,kitchen chairs,640.00,2021-06-09
+LI-0103,CLM-24-0628,clothing,aprons and linens,150.00,2023-12-09
+LI-0104,CLM-24-0629,furniture,bathroom vanity,1200.00,2023-06-20
+LI-0105,CLM-24-0629,electronics,bluetooth speaker,180.00,2024-02-20
+LI-0106,CLM-24-0630,electronics,camera kit,3300.00,2022-10-29
+LI-0107,CLM-24-0630,jewelry,cufflinks,400.00,2015-10-29
+LI-0108,CLM-24-0630,cash,cash,120.00,2024-04-01

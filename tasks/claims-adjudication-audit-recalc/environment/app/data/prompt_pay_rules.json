@@ -1,0 +1,37 @@
+{
+  "TX": {
+    "clock_start": "proof_of_loss",
+    "deadline_days": 5,
+    "day_type": "business",
+    "annual_rate_pct": "18",
+    "interest_applies": true
+  },
+  "CA": {
+    "clock_start": "proof_of_loss",
+    "deadline_days": 40,
+    "day_type": "calendar",
+    "annual_rate_pct": "10",
+    "interest_applies": true
+  },
+  "FL": {
+    "clock_start": "fnol",
+    "deadline_days": 20,
+    "day_type": "business",
+    "annual_rate_pct": "12",
+    "interest_applies": true
+  },
+  "OH": {
+    "clock_start": "fnol",
+    "deadline_days": 10,
+    "day_type": "business",
+    "annual_rate_pct": "8",
+    "interest_applies": false
+  },
+  "NY": {
+    "clock_start": "proof_of_loss",
+    "deadline_days": 30,
+    "day_type": "calendar",
+    "annual_rate_pct": "9",
+    "interest_applies": true
+  }
+}

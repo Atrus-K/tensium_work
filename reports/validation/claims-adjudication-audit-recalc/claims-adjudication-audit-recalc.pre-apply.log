@@ -1,0 +1,70 @@
+   AssertionError: assert Decimal('1500.00') == Decimal('6800.00')
+E    +  where Decimal('1500.00') = D('1500.00')
+E    +  and   Decimal('6800.00') = D('6800.00')
+
+/home/user/tensium_work/tasks/claims-adjudication-audit-recalc/tests/test_goldens_main.py:71: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_cli_contract.py::test_export_has_exact_column_set
+PASSED ../tests/test_cli_contract.py::test_export_has_one_row_per_batch_claim
+PASSED ../tests/test_cli_contract.py::test_build_db_creates_payments_table_with_history
+PASSED ../tests/test_cli_contract.py::test_payment_total_is_indemnity_plus_interest[main]
+PASSED ../tests/test_cli_contract.py::test_export_payment_matches_ledger_row[main]
+PASSED ../tests/test_invariants.py::test_money_fields_are_non_negative_two_decimal[main]
+PASSED ../tests/test_invariants.py::test_covered_claims_have_exactly_one_payment_row_for_the_batch[main]
+PASSED ../tests/test_invariants.py::test_rerun_is_idempotent[main]
+PASSED ../tests/test_cli_contract.py::test_payment_total_is_indemnity_plus_interest[alt]
+PASSED ../tests/test_cli_contract.py::test_export_payment_matches_ledger_row[alt]
+PASSED ../tests/test_invariants.py::test_money_fields_are_non_negative_two_decimal[alt]
+PASSED ../tests/test_invariants.py::test_covered_claims_have_exactly_one_payment_row_for_the_batch[alt]
+PASSED ../tests/test_invariants.py::test_occurrence_indemnity_never_exceeds_contents_limit[alt]
+PASSED ../tests/test_invariants.py::test_rerun_is_idempotent[alt]
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0701] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0702] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0703] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0704] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0705] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0706] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0707] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0708] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0709] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0710] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0711] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0712] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0713] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0714] - As...
+FAILED ../tests/test_alt_dataset.py::test_zero_payment_claim_still_records_deductible_absorbed
+FAILED ../tests/test_alt_dataset.py::test_supplemental_sees_original_in_same_batch
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0601]
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0603]
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0604]
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0606]
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0607]
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0613]
+FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0617]
+FAILED ../tests/test_invariants.py::test_every_claim_matches_independent_recomputation[main]
+FAILED ../tests/test_invariants.py::test_no_coverage_claims_have_zero_amounts_and_no_payment[main]
+FAILED ../tests/test_invariants.py::test_occurrence_indemnity_never_exceeds_contents_limit[main]
+FAILED ../tests/test_invariants.py::test_deductible_absorbed_once_per_occurrence[main]
+FAILED ../tests/test_invariants.py::test_category_attribution_never_exceeds_sublimit_per_occurrence[main]
+FAILED ../tests/test_invariants.py::test_interest_zero_when_not_owed_and_positive_when_late[main]
+FAILED ../tests/test_invariants.py::test_every_claim_matches_independent_recomputation[alt]
+FAILED ../tests/test_invariants.py::test_no_coverage_claims_have_zero_amounts_and_no_payment[alt]
+FAILED ../tests/test_invariants.py::test_deductible_absorbed_once_per_occurrence[alt]
+FAILED ../tests/test_invariants.py::test_category_attribution_never_exceeds_sublimit_per_occurrence[alt]
+FAILED ../tests/test_invariants.py::test_interest_zero_when_not_owed_and_positive_when_late[alt]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0602]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0608]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0609]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0610]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0611]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0612]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0614]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0615]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0616]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0618]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0621]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0622]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0624]
+FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0625]
+======================== 48 failed, 14 passed in 1.72s =========================

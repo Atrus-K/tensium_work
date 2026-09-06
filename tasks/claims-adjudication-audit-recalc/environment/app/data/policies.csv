@@ -1,0 +1,25 @@
+policy_id,insured,state,dwelling_limit
+P-1001,"Alvarez, Maria",TX,350000
+P-1002,"Bennett, Thomas",TX,275000
+P-1003,"Chen, Wei",CA,600000
+P-1004,"Dubois, Claire",CA,480000
+P-1005,"Ellison, Mark",FL,320000
+P-1006,"Farouk, Nadia",FL,410000
+P-1007,"Gonzalez, Luis",OH,210000
+P-1008,"Hartmann, Petra",OH,265000
+P-1009,"Iyer, Ravi",NY,525000
+P-1010,"Jensen, Karl",NY,390000
+P-1011,"Kowalski, Anna",TX,300000
+P-1012,"Lindqvist, Sven",CA,550000
+P-1013,"Moreau, Julien",FL,285000
+P-1014,"Nakamura, Yuki",OH,240000
+P-1015,"O'Brien, Sean",NY,455000
+P-1016,"Petrova, Irina",TX,425000
+P-1017,"Quinn, Fiona",CA,375000
+P-1018,"Rossi, Marco",FL,360000
+P-1019,"Singh, Priya",OH,195000
+P-1020,"Tanaka, Hiro",NY,610000
+P-1021,"Underwood, Grace",TX,340000
+P-1022,"Varga, Laszlo",CA,505000
+P-1023,"Whitfield, Dana",FL,295000
+P-1024,"Xu, Ling",OH,230000

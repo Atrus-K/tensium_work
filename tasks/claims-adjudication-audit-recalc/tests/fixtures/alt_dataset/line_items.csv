@@ -1,0 +1,41 @@
+item_id,claim_id,category,description,rcv,purchase_date
+LI-9001,CLM-24-0322,jewelry,rings,2400.00,2015-01-01
+LI-9002,CLM-24-0322,electronics,laptop,3000.00,2023-03-22
+LI-9003,CLM-24-0410,furniture,furniture,20000.00,2022-04-10
+LI-9004,CLM-24-0410,clothing,clothing,6000.00,2023-04-10
+LI-9005,CLM-24-0701,jewelry,necklace,2000.00,2019-07-10
+LI-9006,CLM-24-0701,jewelry,ring,900.00,2020-07-10
+LI-9007,CLM-24-0701,electronics,laptop,2400.00,2023-01-10
+LI-9008,CLM-24-0702,jewelry,watch,1700.00,2018-07-09
+LI-9009,CLM-24-0702,furniture,desk,1200.00,2023-01-09
+LI-9010,CLM-24-0703,electronics,laptop,2200.00,2023-07-05
+LI-9011,CLM-24-0704,furniture,cabinets,3900.00,2021-07-04
+LI-9012,CLM-24-0704,appliances,dishwasher,1200.00,2020-01-04
+LI-9013,CLM-24-0705,jewelry,earrings,500.00,2016-03-22
+LI-9014,CLM-24-0705,electronics,monitor,2000.00,2023-09-22
+LI-9015,CLM-24-0705,clothing,coats,800.00,2023-10-22
+LI-9016,CLM-24-0706,electronics,tablet,1000.00,2023-06-20
+LI-9017,CLM-24-0706,furniture,chair,1000.00,2023-12-20
+LI-9018,CLM-24-0706,clothing,clothing,750.00,2024-02-20
+LI-9019,CLM-24-0707,electronics,camera,1500.00,2022-06-20
+LI-9020,CLM-24-0707,tools,tool chest,800.00,2022-12-20
+LI-9021,CLM-24-0708,electronics,appliances found,3000.00,2023-04-10
+LI-9022,CLM-24-0708,books_media,books,500.00,2022-04-10
+LI-9023,CLM-24-0709,furniture,bookshelf,800.00,2023-12-25
+LI-9024,CLM-24-0709,furniture,lamp,300.00,2023-12-26
+LI-9025,CLM-24-0709,electronics,router,240.00,2023-06-25
+LI-9026,CLM-24-0709,books_media,textbooks,1000.00,2019-06-25
+LI-9027,CLM-24-0709,furniture,sofa,3000.00,2022-06-25
+LI-9028,CLM-24-0710,furniture,patio furniture,9000.00,2022-07-12
+LI-9029,CLM-24-0710,sporting_goods,kayak,2000.00,2023-07-12
+LI-9030,CLM-24-0710,electronics,outdoor speakers,1000.00,2024-04-12
+LI-9031,CLM-24-0711,furniture,outdoor set,4000.00,2023-07-02
+LI-9032,CLM-24-0711,appliances,grill,1600.00,2021-07-02
+LI-9033,CLM-24-0712,electronics,home theatre,4500.00,2023-12-15
+LI-9034,CLM-24-0712,electronics,laptop,1500.00,2024-03-15
+LI-9035,CLM-24-0712,furniture,sofa,2000.00,2022-06-15
+LI-9036,CLM-24-0713,appliances,oven,2000.00,2022-06-22
+LI-9037,CLM-24-0713,furniture,table,4000.00,2021-06-22
+LI-9038,CLM-24-0713,clothing,clothing,1600.00,2023-06-22
+LI-9039,CLM-24-0714,jewelry,watch,1200.00,2020-06-23
+LI-9040,CLM-24-0714,electronics,phone,1000.00,2023-12-23

@@ -1,0 +1,4 @@
+payment_id,claim_id,occurrence_id,batch,payment_date,policy_version_id,indemnity,interest,deductible_applied,category_acv
+PAY-24-000117,CLM-24-0217,OCC-24-0217,2024-03,2024-03-31,PV-1006-A,6430.00,0.00,1500.00,"{""jewelry"": ""1200.00"", ""electronics"": ""4100.00"", ""furniture"": ""2630.00""}"
+PAY-24-000141,CLM-24-0305,OCC-24-0305,2024-04,2024-04-30,PV-1015-A,60000.00,0.00,1000.00,"{""furniture"": ""20400.00"", ""electronics"": ""7840.00"", ""appliances"": ""10312.50"", ""clothing"": ""4500.00"", ""art"": ""3200.00""}"
+PAY-24-000163,CLM-24-0412,OCC-24-0412,2024-05,2024-05-31,PV-1020-A,199.00,0.00,2500.00,"{""jewelry"": ""1900.00"", ""electronics"": ""799.00""}"
