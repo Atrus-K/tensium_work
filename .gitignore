@@ -6,8 +6,8 @@ __pycache__/
 *.egg-info/
 
 # Validation artifacts (regenerate with scripts/validate_task.py / scripts/harbor_validate.sh)
-reports/validation/*.log
-reports/validation/*.txt
+reports/validation/**/*.log
+reports/validation/**/*.txt
 reports/harbor-jobs/
 
 # Harbor

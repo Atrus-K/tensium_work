@@ -1,2 +1,0 @@
-fix applied: tessera/adjudication/engine.py tessera/adjudication/rounding.py tessera/calendar/business_days.py tessera/models.py tessera/payments/ledger.py tessera/payments/scheduler.py tessera/policy/coverage.py tessera/policy/lookup.py tessera/storage/db.py tessera/valuation/depreciation.py 
-2026-09-06T22:37:39 INFO tessera.cli: built data/claims.db from data (33 claims, 3 historical payments)
