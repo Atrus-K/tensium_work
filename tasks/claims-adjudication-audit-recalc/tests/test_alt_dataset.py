@@ -50,6 +50,12 @@ GOLDEN = {
     "CLM-24-0713": ("PV-9004-A", "paid", "5500.00", "0.00", "3000.00", "2500.00", 14, "0.00"),
     # NY (alt) FNOL Mon 06-24 + 12 bd (07-04 skipped) = 07-11 -> 4 days; 1100*.09*4/365 = 1.0849 -> 1.08
     "CLM-24-0714": ("PV-9005-A", "paid", "2100.00", "0.00", "1000.00", "1100.00", 4, "1.08"),
+    # OCC-24-0715, both claims in the batch with the same loss date but received in the REVERSE of claim-id order:
+    # CLM-24-0716 (received 07-06) is processed before CLM-24-0715 (received 07-11), so 0716 absorbs the 1200 deductible.
+    # 0716: television 1500@12m 20% = 1200; armchair 500@4m = 500 -> gross 1700 - 1200 = 500. CA: FNOL 07-03 + 30 = 08-02.
+    "CLM-24-0716": ("PV-9007-A", "paid", "1700.00", "0.00", "1200.00", "500.00", 0, "0.00"),
+    # 0715: necklace 1000 (jewelry, within 1500); sofa 2400@24m 20% = 1920 -> gross 2920, deductible already absorbed -> 2920.
+    "CLM-24-0715": ("PV-9007-A", "paid", "2920.00", "0.00", "0.00", "2920.00", 0, "0.00"),
 }
 
 
@@ -77,3 +83,14 @@ def test_zero_payment_claim_still_records_deductible_absorbed(alt_run):
 def test_supplemental_sees_original_in_same_batch(alt_run):
     occ = alt_run.payments_for_occurrence("OCC-24-0706")
     assert sum(D(p["deductible_applied"]) for p in occ) == D("3000.00")  # 2500 + 500 = the occurrence deductible, once
+
+
+def test_processing_order_is_loss_date_then_received_date_not_claim_id(alt_run):
+    """CH-7 section 2 / 8: within an occurrence the claim received earlier counts as prior activity,
+    even when its claim id sorts later."""
+    first = alt_run.payments_for_claim("CLM-24-0716")
+    second = alt_run.payments_for_claim("CLM-24-0715")
+    assert len(first) == 1 and len(second) == 1
+    assert D(first[0]["deductible_applied"]) == D("1200.00")
+    assert D(second[0]["deductible_applied"]) == 0
+    assert sum(D(p["deductible_applied"]) for p in alt_run.payments_for_occurrence("OCC-24-0715")) == D("1200.00")

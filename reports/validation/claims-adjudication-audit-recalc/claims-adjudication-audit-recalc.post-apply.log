@@ -1,7 +1,4 @@
-i_contract.py .....                                      [ 45%]
-../tests/test_invariants.py .........                                    [ 59%]
-../tests/test_cli_contract.py ..                                         [ 62%]
-../tests/test_invariants.py .........                                    [ 77%]
+y .........                                    [ 78%]
 ../tests/test_goldens_main.py ..............                             [100%]
 
 ==================================== PASSES ====================================
@@ -20,8 +17,11 @@ PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0711]
 PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0712]
 PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0713]
 PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0714]
+PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0715]
+PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0716]
 PASSED ../tests/test_alt_dataset.py::test_zero_payment_claim_still_records_deductible_absorbed
 PASSED ../tests/test_alt_dataset.py::test_supplemental_sees_original_in_same_batch
+PASSED ../tests/test_alt_dataset.py::test_processing_order_is_loss_date_then_received_date_not_claim_id
 PASSED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0601]
 PASSED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0603]
 PASSED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0604]
@@ -68,4 +68,4 @@ PASSED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document
 PASSED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0622]
 PASSED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0624]
 PASSED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0625]
-============================== 62 passed in 1.64s ==============================
+============================== 65 passed in 1.69s ==============================

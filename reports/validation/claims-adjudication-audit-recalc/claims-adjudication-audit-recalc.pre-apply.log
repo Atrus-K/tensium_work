@@ -1,10 +1,7 @@
-   AssertionError: assert Decimal('1500.00') == Decimal('6800.00')
-E    +  where Decimal('1500.00') = D('1500.00')
-E    +  and   Decimal('6800.00') = D('6800.00')
-
-/home/user/tensium_work/tasks/claims-adjudication-audit-recalc/tests/test_goldens_main.py:71: AssertionError
+AssertionError
 ==================================== PASSES ====================================
 =========================== short test summary info ============================
+PASSED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0716]
 PASSED ../tests/test_cli_contract.py::test_export_has_exact_column_set
 PASSED ../tests/test_cli_contract.py::test_export_has_one_row_per_batch_claim
 PASSED ../tests/test_cli_contract.py::test_build_db_creates_payments_table_with_history
@@ -33,8 +30,10 @@ FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0711] - As...
 FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0712] - As...
 FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0713] - As...
 FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0714] - As...
+FAILED ../tests/test_alt_dataset.py::test_alt_boundary_case[CLM-24-0715] - As...
 FAILED ../tests/test_alt_dataset.py::test_zero_payment_claim_still_records_deductible_absorbed
 FAILED ../tests/test_alt_dataset.py::test_supplemental_sees_original_in_same_batch
+FAILED ../tests/test_alt_dataset.py::test_processing_order_is_loss_date_then_received_date_not_claim_id
 FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0601]
 FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0603]
 FAILED ../tests/test_audit_sample.py::test_sampled_claim_matches_auditor[CLM-24-0604]
@@ -67,4 +66,4 @@ FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document
 FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0622]
 FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0624]
 FAILED ../tests/test_goldens_main.py::test_unlisted_claim_matches_rules_document[CLM-24-0625]
-======================== 48 failed, 14 passed in 1.72s =========================
+======================== 50 failed, 15 passed in 1.71s =========================

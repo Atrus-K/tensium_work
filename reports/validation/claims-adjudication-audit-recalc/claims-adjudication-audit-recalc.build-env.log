@@ -3,7 +3,7 @@ docker build -f tasks/claims-adjudication-audit-recalc/environment/Dockerfile -t
 #0 building with "default" instance using docker driver
 
 #1 [internal] load build definition from Dockerfile
-#1 transferring dockerfile: 617B done
+#1 transferring dockerfile: 681B done
 #1 DONE 0.0s
 
 #2 [internal] load metadata for docker.io/library/python:3.11-slim
@@ -18,28 +18,29 @@ docker build -f tasks/claims-adjudication-audit-recalc/environment/Dockerfile -t
 #4 DONE 0.0s
 
 #5 [internal] load build context
-#5 transferring context: 85.25kB done
+#5 transferring context: 14.89kB done
 #5 DONE 0.0s
 
-#6 [3/5] WORKDIR /app
+#6 [2/5] RUN pip install --no-cache-dir pytest==8.4.1 pluggy==1.6.0 iniconfig==2.3.0 packaging==26.3 Pygments==2.21.0
 #6 CACHED
 
-#7 [4/5] COPY . /tmp/ctx
+#7 [3/5] WORKDIR /app
 #7 CACHED
 
-#8 [2/5] RUN pip install --no-cache-dir pytest==8.4.1
-#8 CACHED
+#8 [4/5] COPY . /tmp/ctx
+#8 DONE 0.0s
 
 #9 [5/5] RUN set -e;     if [ -d /tmp/ctx/environment/app ]; then SRC=/tmp/ctx/environment/app; else SRC=/tmp/ctx/app; fi;     cp -a "$SRC/." /app/ && rm -rf /tmp/ctx &&     find /app -name __pycache__ -type d -prune -exec rm -rf {} + &&     python -m tessera.cli build-db --data /app/data --out /app/data/claims.db
-#9 CACHED
+#9 0.328 2026-09-06T22:37:34 INFO tessera.cli: built /app/data/claims.db from /app/data (33 claims, 3 historical payments)
+#9 DONE 0.4s
 
 #10 exporting to image
-#10 exporting layers done
-#10 exporting manifest sha256:6f310588decef0880df4ff21dbd08e0c89696ca5b68866c61103f9d442eab719 done
-#10 exporting config sha256:3e3adf095b2b22a2ede4128ffed62c2dc0fa3d72c5d9a234f98c3ddbdc216faf done
-#10 exporting attestation manifest sha256:eaac60a0057e113f2609cc06cb3c3bfcf477a36f327bebcc09d5c8b974b343eb
-#10 exporting attestation manifest sha256:eaac60a0057e113f2609cc06cb3c3bfcf477a36f327bebcc09d5c8b974b343eb 0.0s done
-#10 exporting manifest list sha256:a1ade350847f3c95ec7c32382a8ce1ab9c67cc37ef5bb60e79ef8edef1361850 done
+#10 exporting layers 0.0s done
+#10 exporting manifest sha256:5fd0505da77296badc6537ec1de7477026bf34c6a060cb3e75eb672d18b6b8d0 done
+#10 exporting config sha256:7e64358901c23aa6420aa823faa6b506a50cb36624c7c122fc9262260a8f0eca done
+#10 exporting attestation manifest sha256:6102e392bb0bb00a3c13dc5585c3d6cda3a136505dcfdef210f22f8a67180795 done
+#10 exporting manifest list sha256:4d6f8675f632f99307e921765b6f6e73d4e12bc30c9647a0a4226d3d17bd5edf done
 #10 naming to docker.io/tbval/claims-adjudication-audit-recalc:validate-envctx done
+#10 unpacking to docker.io/tbval/claims-adjudication-audit-recalc:validate-envctx
 #10 unpacking to docker.io/tbval/claims-adjudication-audit-recalc:validate-envctx 0.0s done
 #10 DONE 0.1s

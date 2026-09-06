@@ -9,7 +9,7 @@
       "solve_seconds": 0.4,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 2.3,
+        "seconds": 2.5,
         "reward": "0",
         "pytest": {
           "failed": 50,
@@ -19,7 +19,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 2.3,
+        "seconds": 2.4,
         "reward": "1",
         "pytest": {
           "passed": 65,
@@ -160,12 +160,12 @@
         {
           "name": "docker-build(task-root-context)",
           "passed": true,
-          "detail": "6s; log: reports/validation/claims-adjudication-audit-recalc/claims-adjudication-audit-recalc.build-root.log"
+          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc.build-root.log"
         },
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
           "passed": true,
-          "detail": "1s; log: reports/validation/claims-adjudication-audit-recalc/claims-adjudication-audit-recalc.build-env.log"
+          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc.build-env.log"
         },
         {
           "name": "image-has-no-tests-or-solution",
@@ -240,7 +240,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "2.3s"
+          "detail": "2.4s"
         }
       ]
     }
