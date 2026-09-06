@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Validation artifacts (regenerate with scripts/validate_task.py / scripts/harbor_validate.sh)
+reports/validation/*.log
+reports/validation/*.txt
+reports/harbor-jobs/
+
+# Harbor
+dist.tar.gz
+jobs/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

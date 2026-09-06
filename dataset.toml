@@ -1,0 +1,13 @@
+# Harbor dataset manifest. Regenerate the task list with:
+#   harbor add --scan tasks --to dataset.toml
+
+[dataset]
+name = "tensium/tb-acceptance-v1"
+version = "1.0.0"
+description = "Harbor-format agentic coding tasks built to TB Data Acceptance Criteria V1.3"
+keywords = ["python", "software-engineering", "harbor"]
+[[dataset.authors]]
+name = "Tensium"
+email = "chendurra@gmail.com"
+
+tasks = []
