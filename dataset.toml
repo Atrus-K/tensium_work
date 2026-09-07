@@ -13,17 +13,17 @@ email = "chendurra@gmail.com"
 
 [[tasks]]
 name = "tensium/bundlevault-pentest-remediation"
-digest = "sha256:a9c84961bacef34d065ed263ec363307b92583803c4337f0a34c67dacc48a415"
+digest = "sha256:50f33697d1d58c96e7fc34003019281d4a28b8013cb7b4cd98a024e2bee9a0a2"
 
 [[tasks]]
 name = "tensium/claims-adjudication-audit-recalc"
-digest = "sha256:201d6cf32612fbf2d01662445a0fab1ee3dbcced47004d8a180e5f6b36940048"
+digest = "sha256:050297a4b9fda5dc0b08e6327ae8de0b9e60ebd7b357d399c95e5d5d8022032a"
 
 [[tasks]]
 name = "tensium/cobol-loan-accrual-port-parity"
-digest = "sha256:654ab19b0e1b9462f88b3655af9aabd573db303a542c6760c1bc919d3e596ebd"
+digest = "sha256:85838fa2a02bcb7a7c9f11f40a84f0705f6d56414b3d20c5d4ee0a75701e5484"
 
 [[tasks]]
 name = "tensium/recon-nightly-timeout-2291"
-digest = "sha256:8810f0b2f75c79c609e4a7b4bb87176f23bcb1d284b53552cb6081e064c3d27a"
+digest = "sha256:9a4f40af5de334102cb5e19ba557d3deeff231388bcd43601b7f37e23dab28aa"
 
