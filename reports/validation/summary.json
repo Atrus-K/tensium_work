@@ -4,12 +4,12 @@
       "task": "bundlevault-pentest-remediation",
       "passed": true,
       "image": "tbval/bundlevault-pentest-remediation:validate",
-      "loc_changed": 424,
+      "loc_changed": 425,
       "files_changed": 10,
       "solve_seconds": 0.1,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 32.5,
+        "seconds": 30.7,
         "reward": "0",
         "pytest": {
           "failed": 53,
@@ -19,7 +19,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 31.8,
+        "seconds": 30.7,
         "reward": "1",
         "pytest": {
           "passed": 74,
@@ -175,7 +175,7 @@
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
           "passed": true,
-          "detail": "0s; log: reports/validation/bundlevault-pentest-remediation.build-env.log"
+          "detail": "1s; log: reports/validation/bundlevault-pentest-remediation.build-env.log"
         },
         {
           "name": "image-has-no-tests-or-solution",
@@ -230,7 +230,7 @@
         {
           "name": "post-apply:loc-changed>100",
           "passed": true,
-          "detail": "loc_changed=424"
+          "detail": "loc_changed=425"
         },
         {
           "name": "post-apply:test.sh-exit-zero",
@@ -255,7 +255,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "31.8s"
+          "detail": "30.7s"
         }
       ]
     },
@@ -268,7 +268,7 @@
       "solve_seconds": 0.4,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 2.6,
+        "seconds": 2.5,
         "reward": "0",
         "pytest": {
           "failed": 50,
@@ -429,12 +429,12 @@
         {
           "name": "docker-build(task-root-context)",
           "passed": true,
-          "detail": "1s; log: reports/validation/claims-adjudication-audit-recalc.build-root.log"
+          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc.build-root.log"
         },
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
           "passed": true,
-          "detail": "1s; log: reports/validation/claims-adjudication-audit-recalc.build-env.log"
+          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc.build-env.log"
         },
         {
           "name": "image-has-no-tests-or-solution",
@@ -797,7 +797,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 14.6,
+        "seconds": 15.0,
         "reward": "1",
         "pytest": {
           "passed": 32,
@@ -1033,7 +1033,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "14.6s"
+          "detail": "15.0s"
         }
       ]
     }
@@ -1042,7 +1042,7 @@
   "n_pre_apply_fail_ok": 4,
   "n_post_apply_pass_ok": 4,
   "anomalous_tasks": [],
-  "loc_changed_p25": 370.25,
+  "loc_changed_p25": 371.0,
   "loc_changed_p25_gt_100": true,
   "all_passed": true
 }

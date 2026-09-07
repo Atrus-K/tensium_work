@@ -27,10 +27,10 @@ reports/                      # validation outputs (summary.json / summary.md / 
 
 | task | category | lines changed / files changed by solve.sh | pre-apply | post-apply | resources (task.toml) | verifier / agent timeout |
 |---|---|---|---|---|---|---|
-| `claims-adjudication-audit-recalc` | Operations (claims processing, prompt-pay compliance) | 447 / 10 | 50 of 65 fail → reward 0 | 65 of 65 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 600 s / 2700 s |
-| `bundlevault-pentest-remediation` | Security hardening / reverse-engineering patch | 426 / 10 | 53 of 74 fail → reward 0 | 74 of 74 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 600 s / 2400 s |
-| `cobol-loan-accrual-port-parity` | Rewriting / cross-language migration (COBOL to Python) | 213 / 9 | 23 of 29 fail → reward 0 | 29 of 29 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 600 s / 2700 s |
-| `recon-nightly-timeout-2291` | Performance / algorithm optimisation (incident-driven) | 826 / 15 | 28 of 32 fail → reward 0 | 32 of 32 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 900 s / 3600 s |
+| `claims-adjudication-audit-recalc` | Operations (claims processing, prompt-pay compliance) | 446 / 10 | 50 of 65 fail → reward 0 | 65 of 65 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 600 s / 2700 s |
+| `bundlevault-pentest-remediation` | Security hardening / reverse-engineering patch | 425 / 10 | 53 of 74 fail → reward 0 | 74 of 74 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 600 s / 2400 s |
+| `cobol-loan-accrual-port-parity` | Rewriting / cross-language migration (COBOL to Python) | 209 / 9 | 23 of 29 fail → reward 0 | 29 of 29 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 600 s / 2700 s |
+| `recon-nightly-timeout-2291` | Performance / algorithm optimisation (incident-driven) | 823 / 15 | 28 of 32 fail → reward 0 | 32 of 32 pass → reward 1 | 2 CPU / 2048 MB / 4096 MB disk | 900 s / 3600 s |
 
 - **`claims-adjudication-audit-recalc`** — tessera-claims: stdlib + sqlite claims adjudication engine; an internal audit ticket, the auditor's recomputed figures, the production batch log and a product-rules manual are in the workspace. Seven cross-module root causes (policy-version selection, per-occurrence deductible and sublimits, depreciation, Decimal rounding, per-state prompt-pay clocks, business-day calendar, occurrence-scoped ledger).
 - **`bundlevault-pentest-remediation`** — BundleVault: stdlib http.server + sqlite firmware-bundle registry for a proprietary binary TLV format; a pentest report with six findings, five captured malicious .fwb samples, the access log and a forged audit excerpt are in the workspace. Parser/verifier differential, path traversal, manifest/file bijection, identity binding, rollback/revocation and log injection must all be fixed per the format spec.
@@ -82,11 +82,11 @@ docker run --rm -it t bash            # then inside the container:
 
 ## Validation results
 
-All four tasks pass every check in `scripts/validate_task.py` (43 checks per task) and the Harbor `nop` / `oracle` runs (`scripts/harbor_validate.sh`).
+All four tasks pass every check in `scripts/validate_task.py` (46 checks per task, including the leakage checks) and the Harbor `nop` / `oracle` runs (`scripts/harbor_validate.sh`).
 
 - Pre-apply failures (required): 4 / 4 tasks (reward `0`, at least one failing test, tests collected).
 - Post-apply successes (required): 4 / 4 tasks (reward `1`, all tests pass, solve.sh well within the agent timeout).
-- Lines changed by the reference solutions: 447, 426, 213, 826; **P25 = 373** (criterion > 100).
+- Lines changed by the reference solutions: 446, 425, 209, 823; **P25 = 371** (criterion > 100).
 - Every task changes at least 9 files; every task is Python, pip-only, offline and deterministic.
 - Adversarial review: for each task an independent reviewer wrote a structurally different solution from `instruction.md` and the workspace alone and ran the hidden suite against it; all pass (claims 65/65, BundleVault 74/74, COBOL port 29/29, recon 32/32). Findings and fixes are recorded in `reports/review/README.md`.
 - Design provenance: 14 candidate designs, two per required category, scored by three judges; ranking and rationale in `reports/design/ranked_designs.md`.

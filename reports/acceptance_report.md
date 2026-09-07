@@ -2,7 +2,7 @@
 
 - **Dataset name:** tensium/tb-acceptance-v1
 - **Number of tasks:** 4
-- **Data version / commit:** 1.0.0 / 8511b5d
+- **Data version / commit:** 1.0.0 / 53ce71a
 
 ## Step 1: format check
 
@@ -15,14 +15,14 @@ Checked per task: directory name charset, six required files, task.toml parses (
 - Pre-apply failures (required): **4 / 4**
 - Post-apply successes (required): **4 / 4**
 - Anomalous tasks: **none**
-- Lines changed by solve.sh per task: [213, 426, 447, 826]; P25 = 372.75 (criterion > 100: Pass)
+- Lines changed by solve.sh per task: [209, 425, 446, 823]; P25 = 371.0 (criterion > 100: Pass)
 
 | task | pre exit | pre reward | pre failed tests | post exit | post reward | post passed tests | LOC changed | files changed | solve.sh s | harbor nop | harbor oracle |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| bundlevault-pentest-remediation | 1 | 0 | 53 | 0 | 1 | 74 | 426 | 10 | 0.1 | 0 | 1 |
-| claims-adjudication-audit-recalc | 1 | 0 | 50 | 0 | 1 | 65 | 447 | 10 | 0.3 | 0 | 1 |
-| cobol-loan-accrual-port-parity | 1 | 0 | 23 | 0 | 1 | 29 | 213 | 9 | 0.3 | 0 | 1 |
-| recon-nightly-timeout-2291 | 1 | 0 | 21 | 0 | 1 | 32 | 826 | 15 | 0.7 | 0 | 1 |
+| bundlevault-pentest-remediation | 1 | 0 | 53 | 0 | 1 | 74 | 425 | 10 | 0.1 | 0 | 1 |
+| claims-adjudication-audit-recalc | 1 | 0 | 50 | 0 | 1 | 65 | 446 | 10 | 0.4 | 0 | 1 |
+| cobol-loan-accrual-port-parity | 1 | 0 | 23 | 0 | 1 | 29 | 209 | 9 | 0.4 | 0 | 1 |
+| recon-nightly-timeout-2291 | 1 | 0 | 21 | 0 | 1 | 32 | 823 | 15 | 0.8 | 0 | 1 |
 
 ## Step 3: scaffold baseline (avg@8 / pass@8)
 
