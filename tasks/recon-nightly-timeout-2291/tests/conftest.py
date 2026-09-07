@@ -43,6 +43,7 @@ FULL_RUN_TIMEOUT = 150.0  # seconds before the child is killed (the budget itsel
 SMALL_RUN_TIMEOUT = 120.0
 FULL_RUN_BUDGET = 60.0
 SQL_STATEMENT_BUDGET = 300_000
+SQL_CONNECTION_BUDGET = 100
 
 _STATE: dict[str, bool] = {"full_timed_out": False}
 
@@ -59,6 +60,7 @@ class RunResult:
     db_path: Path | None = None
     sql_connects: int | None = None
     sql_statements: int | None = None
+    baseline_db: Path | None = None  # the untouched ledger the run started from
     extra: dict = field(default_factory=dict)
 
     # -- report helpers ------------------------------------------------------
@@ -133,13 +135,59 @@ def run_cli(args: list[str], timeout: float, trace_file: Path | None = None, cwd
     return res
 
 
-def fresh_db(workspace: Path, name: str) -> Path:
-    dst = workspace / f"{name}.db"
+def _unlink_db(path: Path) -> None:
     for suffix in ("", "-wal", "-shm", "-journal"):
-        p = Path(str(dst) + suffix)
+        p = Path(str(path) + suffix)
         if p.exists():
             p.unlink()
-    shutil.copy(DATA / "recon.db", dst)
+
+
+def build_v1_ledger(path: Path) -> None:
+    """A genuine schema-v1 ledger built from the baseline DDL and the ERP CSV exports.
+
+    Independent of the application and of the state of the workspace ledger:
+    whatever the agent did to data/recon.db (reconciled a few lines while
+    reproducing, rebuilt it at a newer schema) or to scripts/load_ledger.py,
+    this is what the shipped tenant ledger looked like before the incident work.
+    """
+    _unlink_db(path)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript((FIXTURES / "schema_v1.sql").read_text(encoding="utf-8"))
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version(version) VALUES (1)")
+        with (DATA / "customers.csv").open(newline="", encoding="utf-8") as fh:
+            conn.executemany(
+                "INSERT INTO customers(customer_id, legal_name) VALUES (?, ?)",
+                [(int(r["customer_id"]), r["legal_name"]) for r in csv.DictReader(fh)],
+            )
+        with (DATA / "invoices.csv").open(newline="", encoding="utf-8") as fh:
+            conn.executemany(
+                "INSERT INTO invoices(id, customer_id, reference, amount_cents, currency, due_date, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (int(r["id"]), int(r["customer_id"]), r["reference"], int(r["amount_cents"]), r["currency"],
+                     r["due_date"], r["status"])
+                    for r in csv.DictReader(fh)
+                ],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def baseline_db(workspace: Path) -> Path:
+    """The pristine ledger every scratch copy starts from (built once per session, never written to)."""
+    path = workspace / "baseline_v1.db"
+    if not path.is_file():
+        build_v1_ledger(path)
+    return path
+
+
+def fresh_db(workspace: Path, name: str) -> Path:
+    dst = workspace / f"{name}.db"
+    _unlink_db(dst)
+    shutil.copy(baseline_db(workspace), dst)
     return dst
 
 
@@ -156,7 +204,7 @@ def run_statement(workspace: Path, name: str, statement: Path, timeout: float, t
         timeout=timeout,
         trace_file=trace_file,
     )
-    res.out_dir, res.db_path = out_dir, db_path
+    res.out_dir, res.db_path, res.baseline_db = out_dir, db_path, baseline_db(workspace)
     return res
 
 
@@ -204,7 +252,9 @@ def german_to_cents(text: str) -> int:
 @pytest.fixture(scope="session")
 def workspace(tmp_path_factory) -> Path:
     ws = tmp_path_factory.mktemp("recon_ws")
-    assert (DATA / "recon.db").is_file(), f"ledger not found at {DATA / 'recon.db'}"
+    for name in ("customers.csv", "invoices.csv"):
+        assert (DATA / name).is_file(), f"ERP export not found at {DATA / name}"
+    baseline_db(ws)
     return ws
 
 

@@ -7,7 +7,8 @@
 
 ## Description (author)
 
-Customer 1472 (Hansen Spedition GmbH & Co. KG) has 41 open invoices. Since
+Customer 1472 of tenant Ostsee-Kontor (Hansen Spedition GmbH & Co. KG) has 41 open
+invoices in that tenant's ledger. Since
 their first batch payment on 08-13 the nightly hangs in
 `matching/batch.py:find_batch` — `itertools.combinations` over 41 invoices is
 2^41 subsets. This PR adds `BATCH_SUBSET_CAP = 12` in `config.py` and skips

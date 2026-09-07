@@ -49,13 +49,16 @@ stderr, every pipeline stage logs `stage=<name> ... elapsed=<seconds>s`).
 Exit codes: `0` success; `1` `lookup` found no invoice; `2` bad input (missing
 file, malformed statement).
 
-`run` applies pending schema migrations to the ledger before matching, so an
-older `data/recon.db` is upgraded automatically; running on an up-to-date
-ledger applies nothing.
+Every command applies pending schema migrations to the ledger on start
+(`run` before matching, `lookup` before querying, `migrate` does only that),
+so an older `data/recon.db` is upgraded automatically; running on an
+up-to-date ledger applies nothing.
 
 `lookup` accepts a reference in any formatting variant covered by the
 normalisation rules (case, separators, leading zeros) and prints one line per
 matching invoice: `id<TAB>customer_id<TAB>reference<TAB>amount<TAB>due_date<TAB>status`.
+stdout carries only these invoice lines; when nothing is found, stdout stays
+empty, the diagnostic goes to stderr and the exit code is `1`.
 
 ## Inputs
 
@@ -117,11 +120,13 @@ After `run`:
 * every processed statement line is in `bank_lines` (`INSERT OR REPLACE` by `line_id`);
 * every matched (line, invoice) pair is a row in `match_results` with the rule
   and the line's `amount_cents`;
-* every matched invoice has `status = 'paid'`; unmatched invoices are untouched.
+* every matched invoice has `status = 'paid'`; unmatched invoices are untouched;
+* `match_results` is append-only: `run` never deletes or rewrites rows written
+  by earlier runs (the close jobs reconcile against the full history).
 
 Running the same statement again against the reconciled ledger is allowed:
 the invoices paid by the first run are no longer available and the reports
-reflect that.
+reflect that (its matches are appended to `match_results` like any other run's).
 
 ## Development
 

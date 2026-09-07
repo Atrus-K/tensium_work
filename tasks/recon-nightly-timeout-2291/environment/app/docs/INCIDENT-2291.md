@@ -5,7 +5,7 @@
 | severity        | S2 (finance close blocked, no data loss)                           |
 | opened          | 2026-09-01 02:41 by on-call (T. Bergmann, Platform Ops)            |
 | owner           | payments team                                                      |
-| affected job    | `recon-nightly` (cron 00:00, batch box `fin-batch-02`, 2 vCPU / 4 GB) |
+| affected job    | `recon-nightly` (cron 00:00, batch box `fin-batch-02`, 2 vCPU / 2 GB) |
 | affected tenant | Nordwind Handel & Logistik (onboarded 2026-08-24)                  |
 | related         | PR-418 (batch subset cap, merged 2026-08-14), RECON-2302 (follow-up, never started) |
 
@@ -37,8 +37,10 @@ customers.
   the full file was 1.9 GB, almost entirely `sqlite3 connect` lines).
 * **2026-09-01 10:30** Ops reproduced with the first 200 lines of the
   statement (`data/statements/sample_200.csv`): **18 min 40 s** for 200 lines.
-  cProfile output: `profiles/recon_sample200.cprofile.txt`. Extrapolated,
-  the full statement would need roughly 18–19 hours.
+  Extrapolated, the full statement would need roughly 18–19 hours. Because
+  the profiler slows the engine down further, the cProfile run covers the
+  first 25 lines of the sample (about 2 min 20 s under the profiler):
+  `profiles/recon_sample200.cprofile.txt`.
 * **2026-09-01 11:15** Finance (M. Hartmann) reports that even the manually
   reconciled subset misses the *Sammelüberweisungen* (batch payments) of the
   key accounts; the log shows `batch: candidate set 38 > 12, skipping
@@ -51,13 +53,13 @@ customers.
 2. With `--log-level DEBUG` the store layer logs one `sqlite3 connect` line
    per invoice per statement line — tens of thousands of connections per
    line.
-3. `top` shows a single core at 100 %; the SQLite file is tiny (4 MB) and
+3. `top` shows a single core at 100 %; the SQLite file is tiny (2 MB) and
    fully cached; there is no I/O wait. This is CPU-bound Python.
 4. The cProfile listing is dominated by `repository.get_invoice`,
    `sqlite3.connect`, `fuzzy.levenshtein`, `master.load_customers` and
    `normalize.normalize_reference`.
 5. Warnings `batch: candidate set N > 12, skipping (PR-418 cap)` for 17 lines
-   whose remitters are Nordwind's largest customers (13–48 open invoices).
+   whose remitters are Nordwind's largest customers (13–46 open invoices).
 
 ## Acceptance criteria (Finance Operations, M. Hartmann, 2026-09-01)
 

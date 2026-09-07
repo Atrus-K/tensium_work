@@ -6,25 +6,25 @@
       "image": "tbval/recon-nightly-timeout-2291:validate",
       "loc_changed": 826,
       "files_changed": 15,
-      "solve_seconds": 0.6,
+      "solve_seconds": 0.7,
       "pre_apply": {
         "exit_code": 1,
         "seconds": 152.0,
         "reward": "0",
         "pytest": {
-          "failed": 17,
+          "failed": 20,
           "passed": 3,
           "errors": 7,
-          "collected": 27
+          "collected": 30
         }
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 10.9,
+        "seconds": 12.3,
         "reward": "1",
         "pytest": {
-          "passed": 27,
-          "collected": 27
+          "passed": 30,
+          "collected": 30
         }
       },
       "checks": [
@@ -91,7 +91,7 @@
         {
           "name": "toml-numeric:agent.timeout_sec",
           "passed": true,
-          "detail": "2700.0"
+          "detail": "3600.0"
         },
         {
           "name": "toml-no-secrets",
@@ -136,7 +136,7 @@
         {
           "name": "instruction-nonempty",
           "passed": true,
-          "detail": "4674 chars"
+          "detail": "4950 chars"
         },
         {
           "name": "instruction-no-verifier-leak",
@@ -161,12 +161,12 @@
         {
           "name": "docker-build(task-root-context)",
           "passed": true,
-          "detail": "7s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-root.log"
+          "detail": "3s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-root.log"
         },
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
           "passed": true,
-          "detail": "3s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-env.log"
+          "detail": "2s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-env.log"
         },
         {
           "name": "image-has-no-tests-or-solution",
@@ -186,12 +186,12 @@
         {
           "name": "pre-apply:at-least-one-test-fails",
           "passed": true,
-          "detail": "{\"failed\": 17, \"passed\": 3, \"errors\": 7, \"collected\": 27}"
+          "detail": "{\"failed\": 20, \"passed\": 3, \"errors\": 7, \"collected\": 30}"
         },
         {
           "name": "pre-apply:tests-collected",
           "passed": true,
-          "detail": "{\"failed\": 17, \"passed\": 3, \"errors\": 7, \"collected\": 27}"
+          "detail": "{\"failed\": 20, \"passed\": 3, \"errors\": 7, \"collected\": 30}"
         },
         {
           "name": "post-apply:solve.sh-exit-zero",
@@ -201,7 +201,7 @@
         {
           "name": "post-apply:solve.sh-within-agent-timeout",
           "passed": true,
-          "detail": "1s < 2700s"
+          "detail": "1s < 3600s"
         },
         {
           "name": "post-apply:solve.sh-did-not-write-reward",
@@ -231,17 +231,17 @@
         {
           "name": "post-apply:all-tests-pass",
           "passed": true,
-          "detail": "{\"passed\": 27, \"collected\": 27}"
+          "detail": "{\"passed\": 30, \"collected\": 30}"
         },
         {
           "name": "post-apply:tests-collected-not-all-skipped",
           "passed": true,
-          "detail": "{\"passed\": 27, \"collected\": 27}"
+          "detail": "{\"passed\": 30, \"collected\": 30}"
         },
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "10.9s"
+          "detail": "12.3s"
         }
       ]
     }

@@ -1,0 +1,139 @@
+# cProfile of the recon nightly job, INCIDENT-2291 reproduction on fin-batch-02
+#
+#   python -m cProfile -o recon_sample.prof -m recon.cli run --db data/recon.db \
+#       --statement data/statements/sample_25.csv --customers data/customers.csv --out /tmp/out
+#
+# sample_25.csv = header + first 25 lines of data/statements/sample_200.csv. The unprofiled
+# 200-line sample run took 18 min 40 s; under the profiler the engine is slower still, so ops
+# profiled 25 lines (139 s wall, 24 of 25 lines matched) and extrapolated.
+# Path prefixes stripped. Listings: cumulative time (top 45), internal time (top 30), callers
+# of the hot functions.
+#
+====================================================================================================
+== sorted by cumulative time
+====================================================================================================
+Tue Sep  1 10:33:47 2026    recon_sample.prof
+
+         121434666 function calls (61170444 primitive calls) in 138.304 seconds
+
+   Ordered by: cumulative time
+   List reduced from 561 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000  139.449  139.449 cli.py:83(main)
+        1    0.000    0.000  139.443  139.443 cli.py:42(cmd_run)
+        1    0.000    0.000  139.443  139.443 run.py:31(run_pipeline)
+       25    0.000    0.000  139.380    5.575 stages.py:18(process_line)
+       25    0.000    0.000  136.320    5.453 candidates.py:92(find_candidates)
+       25    2.954    0.118  136.233    5.449 candidates.py:32(scan_references)
+   988425    2.184    0.000   88.157    0.000 repository.py:77(get_invoice)
+   988554   41.902    0.000   41.902    0.000 {method 'execute' of 'sqlite3.Connection' objects}
+60769113/505142    7.944    0.000   33.206    0.000 {built-in method builtins.min}
+  1043647    0.503    0.000   32.875    0.000 candidates.py:51(<genexpr>)
+   538657   23.935    0.000   32.372    0.000 fuzzy.py:5(levenshtein)
+   988529    1.417    0.000   28.024    0.000 repository.py:49(_connect)
+   988529   19.028    0.000   25.725    0.000 {built-in method _sqlite3.connect}
+  1164541    3.124    0.000   12.220    0.000 normalize.py:9(normalize_reference)
+   988529   10.609    0.000   10.609    0.000 {method 'close' of 'sqlite3.Connection' objects}
+  2329082    1.291    0.000    8.258    0.000 __init__.py:178(sub)
+   988529    0.921    0.000    5.858    0.000 functools.py:518(decorating_function)
+  2329091    3.601    0.000    5.199    0.000 {method 'sub' of 're.Pattern' objects}
+   988530    2.779    0.000    4.937    0.000 functools.py:35(update_wrapper)
+   989044    2.143    0.000    3.414    0.000 repository.py:22(_row_to_invoice)
+       25    0.016    0.001    2.291    0.092 master.py:56(identify_by_name)
+   988426    2.114    0.000    2.114    0.000 {method 'fetchone' of 'sqlite3.Cursor' objects}
+  2329160    1.268    0.000    1.770    0.000 __init__.py:272(_compile)
+  6919797    1.769    0.000    1.769    0.000 {built-in method builtins.getattr}
+       45    0.453    0.010    1.615    0.036 master.py:15(load_customers)
+  1976881    1.044    0.000    1.598    0.000 normalize.py:14(<lambda>)
+       25    0.137    0.005    1.386    0.055 master.py:40(_name_lookup)
+   988529    0.699    0.000    0.839    0.000 functools.py:479(lru_cache)
+       25    0.008    0.000    0.766    0.031 master.py:50(identify_by_iban)
+   538657    0.712    0.000    0.712    0.000 fuzzy.py:8(<listcomp>)
+   988554    0.392    0.000    0.680    0.000 __init__.py:1467(debug)
+  8151963    0.645    0.000    0.645    0.000 {method 'replace' of 'str' objects}
+  3318649    0.639    0.000    0.639    0.000 {built-in method builtins.isinstance}
+   135071    0.211    0.000    0.449    0.000 csv.py:107(__next__)
+   376245    0.129    0.000    0.400    0.000 master.py:20(<genexpr>)
+       25    0.000    0.000    0.396    0.016 repository.py:63(all_invoice_ids)
+       25    0.389    0.016    0.389    0.016 repository.py:66(<listcomp>)
+  1976903    0.321    0.000    0.321    0.000 {method 'group' of 're.Match' objects}
+   988564    0.288    0.000    0.288    0.000 __init__.py:1734(isEnabledFor)
+   241265    0.156    0.000    0.253    0.000 normalize.py:30(normalize_iban)
+  1977078    0.242    0.000    0.242    0.000 {built-in method builtins.setattr}
+  1976893    0.234    0.000    0.234    0.000 {method 'lstrip' of 'str' objects}
+  1405806    0.222    0.000    0.222    0.000 {method 'upper' of 'str' objects}
+   988425    0.212    0.000    0.212    0.000 models.py:34(is_open)
+   988582    0.202    0.000    0.202    0.000 pathlib.py:536(__str__)
+
+
+====================================================================================================
+== sorted by internal (tottime)
+====================================================================================================
+Tue Sep  1 10:33:47 2026    recon_sample.prof
+
+         121434666 function calls (61170444 primitive calls) in 138.304 seconds
+
+   Ordered by: internal time
+   List reduced from 561 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   988554   41.902    0.000   41.902    0.000 {method 'execute' of 'sqlite3.Connection' objects}
+   538657   23.935    0.000   32.372    0.000 fuzzy.py:5(levenshtein)
+   988529   19.028    0.000   25.725    0.000 {built-in method _sqlite3.connect}
+   988529   10.609    0.000   10.609    0.000 {method 'close' of 'sqlite3.Connection' objects}
+60769113/505142    7.944    0.000   33.206    0.000 {built-in method builtins.min}
+  2329091    3.601    0.000    5.199    0.000 {method 'sub' of 're.Pattern' objects}
+  1164541    3.124    0.000   12.220    0.000 normalize.py:9(normalize_reference)
+       25    2.954    0.118  136.233    5.449 candidates.py:32(scan_references)
+   988530    2.779    0.000    4.937    0.000 functools.py:35(update_wrapper)
+   988425    2.184    0.000   88.157    0.000 repository.py:77(get_invoice)
+   989044    2.143    0.000    3.414    0.000 repository.py:22(_row_to_invoice)
+   988426    2.114    0.000    2.114    0.000 {method 'fetchone' of 'sqlite3.Cursor' objects}
+  6919797    1.769    0.000    1.769    0.000 {built-in method builtins.getattr}
+   988529    1.417    0.000   28.024    0.000 repository.py:49(_connect)
+  2329082    1.291    0.000    8.258    0.000 __init__.py:178(sub)
+  2329160    1.268    0.000    1.770    0.000 __init__.py:272(_compile)
+  1976881    1.044    0.000    1.598    0.000 normalize.py:14(<lambda>)
+   988529    0.921    0.000    5.858    0.000 functools.py:518(decorating_function)
+   538657    0.712    0.000    0.712    0.000 fuzzy.py:8(<listcomp>)
+   988529    0.699    0.000    0.839    0.000 functools.py:479(lru_cache)
+  8151963    0.645    0.000    0.645    0.000 {method 'replace' of 'str' objects}
+  3318649    0.639    0.000    0.639    0.000 {built-in method builtins.isinstance}
+  1043647    0.503    0.000   32.875    0.000 candidates.py:51(<genexpr>)
+       45    0.453    0.010    1.615    0.036 master.py:15(load_customers)
+   988554    0.392    0.000    0.680    0.000 __init__.py:1467(debug)
+       25    0.389    0.016    0.389    0.016 repository.py:66(<listcomp>)
+  1976903    0.321    0.000    0.321    0.000 {method 'group' of 're.Match' objects}
+   988564    0.288    0.000    0.288    0.000 __init__.py:1734(isEnabledFor)
+  1977078    0.242    0.000    0.242    0.000 {built-in method builtins.setattr}
+  1976893    0.234    0.000    0.234    0.000 {method 'lstrip' of 'str' objects}
+
+
+====================================================================================================
+== callers of the hot functions
+====================================================================================================
+   Ordered by: cumulative time
+   List reduced from 561 to 7 due to restriction <'\\b(get_invoice|_connect|levenshtein|load_customers|normalize_reference|scan_references|_row_to_invoice)\\b'>
+
+Function                             was called by...
+                                         ncalls  tottime  cumtime
+candidates.py:32(scan_references)    <-      25    2.954  136.233  candidates.py:92(find_candidates)
+repository.py:77(get_invoice)        <-  988425    2.184   88.157  candidates.py:32(scan_references)
+fuzzy.py:5(levenshtein)              <-  538657   23.935   32.372  candidates.py:51(<genexpr>)
+repository.py:49(_connect)           <-       1    0.000    0.000  repository.py:55(migrate)
+                                             25    0.000    0.003  repository.py:63(all_invoice_ids)
+                                         988425    1.417   28.017  repository.py:77(get_invoice)
+                                             29    0.000    0.002  repository.py:85(open_invoices_for_customer)
+                                             25    0.000    0.001  repository.py:143(insert_bank_line)
+                                             24    0.000    0.001  repository.py:165(mark_matched)
+normalize.py:9(normalize_reference)  <-  988425    2.768   11.169  candidates.py:32(scan_references)
+                                         176075    0.355    1.051  master.py:40(_name_lookup)
+                                             25    0.000    0.000  master.py:56(identify_by_name)
+                                             16    0.000    0.001  normalize.py:18(extract_reference_tokens)
+repository.py:22(_row_to_invoice)    <-  988425    2.142    3.412  repository.py:77(get_invoice)
+                                            619    0.001    0.002  repository.py:92(<listcomp>)
+master.py:15(load_customers)         <-      20    0.203    0.727  master.py:50(identify_by_iban)
+                                             25    0.250    0.888  master.py:56(identify_by_name)
+
+

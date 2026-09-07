@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from collections import Counter
 
-import pytest
 
 from conftest import (
-    DATA,
     FULL_RUN_BUDGET,
     FULL_STATEMENT,
+    SQL_CONNECTION_BUDGET,
     SQL_STATEMENT_BUDGET,
     db_query,
     german_to_cents,
@@ -58,6 +57,15 @@ def test_sql_statement_budget(full_run):
     assert full_run.sql_statements <= SQL_STATEMENT_BUDGET, (
         f"{full_run.sql_statements} SQLite statements executed for 12,000 lines "
         f"(budget {SQL_STATEMENT_BUDGET}); the ledger is still being queried per candidate"
+    )
+
+
+def test_sql_connection_budget(full_run):
+    require_finished(full_run, "full statement run")
+    assert full_run.sql_connects is not None, "no SQLite trace was recorded for the run"
+    assert full_run.sql_connects <= SQL_CONNECTION_BUDGET, (
+        f"{full_run.sql_connects} SQLite connections opened for 12,000 lines (budget {SQL_CONNECTION_BUDGET}); "
+        f"the ledger is still being opened per line or per invoice"
     )
 
 
@@ -190,7 +198,7 @@ def test_db_match_results_mirror_report(full_run):
 
 def test_db_invoice_status_reflects_matches(full_run):
     require_finished(full_run, "full statement run")
-    before = dict(db_query(DATA / "recon.db", "SELECT id, status FROM invoices"))
+    before = dict(db_query(full_run.baseline_db, "SELECT id, status FROM invoices"))
     after = dict(db_query(full_run.db_path, "SELECT id, status FROM invoices"))
     assert set(before) == set(after), "invoice rows were added or removed"
     matched = {int(i) for r in full_run.matches().values() for i in r["invoice_ids"].split("|")}
@@ -247,5 +255,5 @@ def test_rerun_on_reconciled_ledger(full_run, full_rerun_same_db):
     n_rows = db_query(full_run.db_path, "SELECT COUNT(*) FROM match_results")[0][0]
     assert n_rows == GT["summary"]["matched_invoices"] + exp["matched_invoices"]
     paid = db_query(full_run.db_path, "SELECT COUNT(*) FROM invoices WHERE status = 'paid'")[0][0]
-    paid_before = db_query(DATA / "recon.db", "SELECT COUNT(*) FROM invoices WHERE status = 'paid'")[0][0]
+    paid_before = db_query(full_run.baseline_db, "SELECT COUNT(*) FROM invoices WHERE status = 'paid'")[0][0]
     assert paid == paid_before + GT["summary"]["matched_invoices"] + exp["matched_invoices"]

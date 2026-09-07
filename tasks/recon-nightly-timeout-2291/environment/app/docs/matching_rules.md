@@ -173,9 +173,14 @@ Worked example — customer with available invoices (oldest first):
   has amount 200 but a slice of length 1 is not a run (a single-invoice payment
   is the business of B1/B2, which were already evaluated and found nothing —
   otherwise B3 would not have been reached).
-* Payment `400.00` → `[2..4]` sums to 400 but spans 74 days (> 60) and is not
-  a run; `[0..3]` sums to 480. No run — the line is unmatched.
-* Payment `480.00` → `[0..3]` (49 days) is a run.
+* Payment `400.00` → run `[0..2]` (120 + 80 + 200, 30 days). `[2..4]` also
+  sums to 400 but spans 74 days (> 60) and is not a run.
+* Payment `320.00` → the subset `{501, 512}` (120 + 200) sums to 320 but is not
+  contiguous, and no contiguous slice sums to 320. No run — the line is
+  unmatched.
+* Payment `480.00` → run `[0..3]` (49 days). `[1..4]` also sums to 480 but
+  spans 88 days (> 60) and is not a run — and even inside the window `[0..3]`
+  would win because it starts earlier.
 
 ---
 

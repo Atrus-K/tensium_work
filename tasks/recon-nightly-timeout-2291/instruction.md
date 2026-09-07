@@ -18,28 +18,38 @@ given more time. Read the evidence before touching code:
   Operations' acceptance criteria;
 * `logs/recon_nightly_2026-08-31.log` — the nightly log (excerpt) with stage
   timings, store-layer debug output and warnings;
-* `profiles/recon_sample200.cprofile.txt` — cProfile of the run on the
-  200-line sample `data/statements/sample_200.csv`;
+* `profiles/recon_sample200.cprofile.txt` — cProfile of the run on the first
+  lines of the 200-line sample `data/statements/sample_200.csv`;
 * `docs/pr-418-review.md` — the review thread of the hotfix that introduced
   the 12-invoice cap for rule B3;
 * `docs/matching_rules.md` — the normative matching specification;
 * `README.md` — CLI, input formats, report and persistence contracts.
 
-Fix the root causes (there are several, in different modules, and every one
-of them on its own is enough to blow the time budget), not the symptoms.
+Fix the root causes (there are several, in different modules, and more than
+one of them is on its own enough to blow the time budget), not the symptoms.
+Be careful when reproducing: the unfixed engine needs roughly 5–6 seconds
+per statement line, so reproduce with a handful of lines, not with the sample
+or the full statement. Reproduce against a *copy* of the ledger: acceptance
+starts from the shipped ledger exactly as `scripts/load_ledger.py` builds it
+from `data/customers.csv` and `data/invoices.csv` (nothing reconciled yet), so
+if you do run anything against `data/recon.db` itself, rebuild it afterwards.
 
 ## What must be true when you are done
 
 1. **Performance.** The full statement (12,000 lines against ~34,000 open
    invoices and 3,000 customers) completes with exit code 0 in **under 60
-   seconds** on the 2-CPU batch box — the reference environment for this
-   repository is 2 vCPU / 2 GB. A statement of 1,500 lines in the same format
-   must also finish in that time. The run must not query the ledger per
-   candidate invoice: a full run must execute **at most 300,000 SQL
-   statements** in total (the current code executes hundreds of millions),
-   and a solution that loads or indexes what it needs up front is expected.
-   Any solution must work for other statements in the same format against the
-   same ledger, not just the shipped file.
+   seconds** on a 2-vCPU machine such as the batch box `fin-batch-02` (this
+   workspace's environment, 2 vCPU / 2 GB, is the reference). A statement of
+   1,500 lines in the same format must also finish in that time. The run must
+   not query the ledger per candidate invoice and must not open a new
+   connection per statement line: a full run may execute **at most 300,000
+   SQL statements** in total (counted as individual statement executions, so
+   an `executemany` over N rows counts N, and `BEGIN`/`COMMIT`/`PRAGMA` count
+   too; the current code executes hundreds of millions) and may open **at
+   most 100 SQLite connections** (the current code opens one per candidate
+   invoice). A solution that loads or indexes what it needs up front is
+   expected. Any solution must work for other statements in the same format
+   against the same ledger, not just the shipped file.
 
 2. **Correctness — `docs/matching_rules.md` is the contract.** Every line's
    result (matched invoice set, rule label, or unmatched reason code) must be
@@ -56,21 +66,26 @@ of them on its own is enough to blow the time budget), not the symptoms.
    arrived at by hand) are what the run has to reproduce.
 
 3. **Contracts unchanged.** The CLI (`run`, `migrate`, `lookup`, their
-   arguments and exit codes), the report files `matches.csv`,
-   `unmatched.csv` and `summary.json` (columns, formats, sort order) and the
-   persistence contract (`bank_lines`, `match_results`, invoice `status`)
-   stay exactly as described in `README.md`. Existing columns of the ledger
-   tables must keep their names and meaning.
+   arguments and exit codes — `2` for a missing file or a malformed
+   statement, `1` for a `lookup` miss, without a traceback), the report files
+   `matches.csv`, `unmatched.csv` and `summary.json` (columns, formats, sort
+   order) and the persistence contract (`bank_lines`, `match_results`,
+   invoice `status`) stay exactly as described in `README.md`. Ops parse the
+   stage timings from the nightly log, so `run` must keep logging
+   `stage=<name> ... elapsed=<seconds>s` at INFO level to stderr for at least
+   the `parse`, `match` and `report` stages (add stages if you like).
+   Existing columns of the ledger tables must keep their names and meaning.
 
 4. **Schema changes are allowed, migrations are mandatory.** You may add
    columns, indexes or tables through `recon/store/migrations.py`, but an
-   existing `data/recon.db` must be upgraded automatically the next time
-   `run` (or `migrate`) starts, and running again on an already upgraded
-   ledger must be a no-op. Whatever is stored must be derived by the same
-   normalisation code the matcher uses — the SQL approximation in the current
-   `lookup` query is not equivalent to `normalize_reference`, and `lookup`
-   must find an invoice from any formatting variant of its reference as the
-   README promises.
+   existing `data/recon.db` must be upgraded automatically the next time any
+   command starts (`run`, `migrate` and — as today — `lookup` all apply
+   pending migrations first), and running again on an already upgraded
+   ledger must be a no-op that changes neither schema nor data. Whatever you
+   store must be derived by the same normalisation code the matcher uses
+   (`normalize_reference`), and `lookup` must find an invoice from any
+   formatting variant of its reference as the README promises — check that it
+   does on the ledger as shipped.
 
 5. **Determinism and re-runs.** Two runs of the same statement against
    identical copies of the ledger produce byte-identical report files.
@@ -79,5 +94,6 @@ of them on its own is enough to blow the time budget), not the symptoms.
 
 6. **Housekeeping.** No third-party dependencies (there is no network). The
    unit tests in `tests_unit/` must keep passing (`python -m pytest
-   tests_unit`); add your own as you see fit. Write a short `CHANGES.md` that
-   names each root cause you found and what you changed.
+   tests_unit`); add your own as you see fit. Write a short `CHANGES.md` (a
+   few paragraphs) in the workspace root (`/app/CHANGES.md`) that names each
+   root cause you found — the rule B3 cap among them — and what you changed.
