@@ -1,0 +1,7 @@
+tests/
+solution/
+instruction.md
+task.toml
+README.md
+**/__pycache__/
+**/*.pyc
