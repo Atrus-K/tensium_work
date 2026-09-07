@@ -4,12 +4,12 @@
       "task": "bundlevault-pentest-remediation",
       "passed": true,
       "image": "tbval/bundlevault-pentest-remediation:validate",
-      "loc_changed": 426,
+      "loc_changed": 424,
       "files_changed": 10,
       "solve_seconds": 0.1,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 23.9,
+        "seconds": 32.5,
         "reward": "0",
         "pytest": {
           "failed": 53,
@@ -19,7 +19,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 23.8,
+        "seconds": 31.8,
         "reward": "1",
         "pytest": {
           "passed": 74,
@@ -148,6 +148,16 @@
           "detail": "urls: []"
         },
         {
+          "name": "workspace-no-verifier-references",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "workspace-no-hidden-fixture-names",
+          "passed": true,
+          "detail": ""
+        },
+        {
           "name": "dockerfile-no-tests-solution-copy",
           "passed": true,
           "detail": ""
@@ -169,6 +179,11 @@
         },
         {
           "name": "image-has-no-tests-or-solution",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "image-no-stray-files-outside-app",
           "passed": true,
           "detail": ""
         },
@@ -215,7 +230,7 @@
         {
           "name": "post-apply:loc-changed>100",
           "passed": true,
-          "detail": "loc_changed=426"
+          "detail": "loc_changed=424"
         },
         {
           "name": "post-apply:test.sh-exit-zero",
@@ -240,7 +255,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "23.8s"
+          "detail": "31.8s"
         }
       ]
     },
@@ -248,9 +263,9 @@
       "task": "claims-adjudication-audit-recalc",
       "passed": true,
       "image": "tbval/claims-adjudication-audit-recalc:validate",
-      "loc_changed": 447,
+      "loc_changed": 446,
       "files_changed": 10,
-      "solve_seconds": 0.3,
+      "solve_seconds": 0.4,
       "pre_apply": {
         "exit_code": 1,
         "seconds": 2.6,
@@ -263,7 +278,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 2.0,
+        "seconds": 2.4,
         "reward": "1",
         "pytest": {
           "passed": 65,
@@ -392,6 +407,16 @@
           "detail": "urls: []"
         },
         {
+          "name": "workspace-no-verifier-references",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "workspace-no-hidden-fixture-names",
+          "passed": true,
+          "detail": ""
+        },
+        {
           "name": "dockerfile-no-tests-solution-copy",
           "passed": true,
           "detail": ""
@@ -404,15 +429,20 @@
         {
           "name": "docker-build(task-root-context)",
           "passed": true,
-          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc.build-root.log"
+          "detail": "1s; log: reports/validation/claims-adjudication-audit-recalc.build-root.log"
         },
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
           "passed": true,
-          "detail": "0s; log: reports/validation/claims-adjudication-audit-recalc.build-env.log"
+          "detail": "1s; log: reports/validation/claims-adjudication-audit-recalc.build-env.log"
         },
         {
           "name": "image-has-no-tests-or-solution",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "image-no-stray-files-outside-app",
           "passed": true,
           "detail": ""
         },
@@ -459,7 +489,7 @@
         {
           "name": "post-apply:loc-changed>100",
           "passed": true,
-          "detail": "loc_changed=447"
+          "detail": "loc_changed=446"
         },
         {
           "name": "post-apply:test.sh-exit-zero",
@@ -484,7 +514,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "2.0s"
+          "detail": "2.4s"
         }
       ]
     },
@@ -492,12 +522,12 @@
       "task": "cobol-loan-accrual-port-parity",
       "passed": true,
       "image": "tbval/cobol-loan-accrual-port-parity:validate",
-      "loc_changed": 213,
+      "loc_changed": 209,
       "files_changed": 9,
-      "solve_seconds": 0.3,
+      "solve_seconds": 0.4,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 6.1,
+        "seconds": 7.1,
         "reward": "0",
         "pytest": {
           "failed": 23,
@@ -507,7 +537,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 6.1,
+        "seconds": 7.0,
         "reward": "1",
         "pytest": {
           "passed": 29,
@@ -623,7 +653,7 @@
         {
           "name": "instruction-nonempty",
           "passed": true,
-          "detail": "4791 chars"
+          "detail": "4793 chars"
         },
         {
           "name": "instruction-no-verifier-leak",
@@ -634,6 +664,16 @@
           "name": "instruction-no-network-deps",
           "passed": true,
           "detail": "urls: []"
+        },
+        {
+          "name": "workspace-no-verifier-references",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "workspace-no-hidden-fixture-names",
+          "passed": true,
+          "detail": ""
         },
         {
           "name": "dockerfile-no-tests-solution-copy",
@@ -657,6 +697,11 @@
         },
         {
           "name": "image-has-no-tests-or-solution",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "image-no-stray-files-outside-app",
           "passed": true,
           "detail": ""
         },
@@ -703,7 +748,7 @@
         {
           "name": "post-apply:loc-changed>100",
           "passed": true,
-          "detail": "loc_changed=213"
+          "detail": "loc_changed=209"
         },
         {
           "name": "post-apply:test.sh-exit-zero",
@@ -728,7 +773,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "6.1s"
+          "detail": "7.0s"
         }
       ]
     },
@@ -736,12 +781,12 @@
       "task": "recon-nightly-timeout-2291",
       "passed": true,
       "image": "tbval/recon-nightly-timeout-2291:validate",
-      "loc_changed": 826,
+      "loc_changed": 823,
       "files_changed": 15,
-      "solve_seconds": 0.7,
+      "solve_seconds": 0.8,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 152.9,
+        "seconds": 153.7,
         "reward": "0",
         "pytest": {
           "failed": 21,
@@ -752,7 +797,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 12.0,
+        "seconds": 14.6,
         "reward": "1",
         "pytest": {
           "passed": 32,
@@ -868,7 +913,7 @@
         {
           "name": "instruction-nonempty",
           "passed": true,
-          "detail": "5985 chars"
+          "detail": "6057 chars"
         },
         {
           "name": "instruction-no-verifier-leak",
@@ -879,6 +924,16 @@
           "name": "instruction-no-network-deps",
           "passed": true,
           "detail": "urls: []"
+        },
+        {
+          "name": "workspace-no-verifier-references",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "workspace-no-hidden-fixture-names",
+          "passed": true,
+          "detail": ""
         },
         {
           "name": "dockerfile-no-tests-solution-copy",
@@ -902,6 +957,11 @@
         },
         {
           "name": "image-has-no-tests-or-solution",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "image-no-stray-files-outside-app",
           "passed": true,
           "detail": ""
         },
@@ -948,7 +1008,7 @@
         {
           "name": "post-apply:loc-changed>100",
           "passed": true,
-          "detail": "loc_changed=826"
+          "detail": "loc_changed=823"
         },
         {
           "name": "post-apply:test.sh-exit-zero",
@@ -973,7 +1033,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "12.0s"
+          "detail": "14.6s"
         }
       ]
     }
@@ -982,7 +1042,7 @@
   "n_pre_apply_fail_ok": 4,
   "n_post_apply_pass_ok": 4,
   "anomalous_tasks": [],
-  "loc_changed_p25": 372.75,
+  "loc_changed_p25": 370.25,
   "loc_changed_p25_gt_100": true,
   "all_passed": true
 }
