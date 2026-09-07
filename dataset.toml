@@ -5,9 +5,25 @@
 name = "tensium/tb-acceptance-v1"
 version = "1.0.0"
 description = "Harbor-format agentic coding tasks built to TB Data Acceptance Criteria V1.3"
-keywords = ["python", "software-engineering", "harbor"]
+keywords = [ "python", "software-engineering", "harbor",]
 [[dataset.authors]]
 name = "Tensium"
 email = "chendurra@gmail.com"
 
-tasks = []
+
+[[tasks]]
+name = "tensium/bundlevault-pentest-remediation"
+digest = "sha256:a9c84961bacef34d065ed263ec363307b92583803c4337f0a34c67dacc48a415"
+
+[[tasks]]
+name = "tensium/claims-adjudication-audit-recalc"
+digest = "sha256:201d6cf32612fbf2d01662445a0fab1ee3dbcced47004d8a180e5f6b36940048"
+
+[[tasks]]
+name = "tensium/cobol-loan-accrual-port-parity"
+digest = "sha256:654ab19b0e1b9462f88b3655af9aabd573db303a542c6760c1bc919d3e596ebd"
+
+[[tasks]]
+name = "tensium/recon-nightly-timeout-2291"
+digest = "sha256:602d249ffa6b9e4b0ba763683b815d9bff549c1732fc11c86c6743a55a384387"
+
