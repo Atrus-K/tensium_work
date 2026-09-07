@@ -68,8 +68,8 @@ reconciliation tool to be more lenient.
 * m.lindqvist: several of the review threads on PR-218 were closed without changes
   ("matches on our sample"); the sample was 50 current accounts from October. Start there.
 * Lending systems confirmed the mainframe compiles LNACCR01 with `ARITH(EXTEND)`; the
-  program source and copybooks in `legacy/` are current production (LNMAST copybook v3).
-* The Python layouts were generated from the 2018 copybook export on the
-  `ldsys-copybooks` share (see CHANGELOG).
+  program source and copybooks in `legacy/` are current production.
+* Nobody has re-verified the port's record handling against the current copybooks since
+  PR-218 was merged.
 * Root-cause fixes only. A per-account or per-batch adjustment will not pass the April
   reconciliation and will be rejected in review.

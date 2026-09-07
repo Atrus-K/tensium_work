@@ -27,12 +27,6 @@ def rounded(value, scale: int) -> Decimal:
     return Decimal(str(round(float(value), scale)))
 
 
-def truncate(value, scale: int) -> Decimal:
-    """Unrounded COMPUTE / MOVE into an item with *scale* decimals."""
-    # Matched the October sample to the cent.
-    return rounded(value, scale)
-
-
 def fit_pic(value, pic: str | Pic) -> Decimal:
     """Store *value* into an item declared with PICTURE *pic* (e.g. ``"S9(9)V99"``)."""
     p = pic if isinstance(pic, Pic) else parse_pic(pic)

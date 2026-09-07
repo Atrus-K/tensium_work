@@ -49,7 +49,6 @@ def days_360(start: date, end: date) -> int:
     d1, d2 = start.day, end.day
     if d1 == 31:
         d1 = 30
-    # Verified against the October sample (all month-end accrual dates).
     return 360 * (end.year - start.year) + 30 * (end.month - start.month) + (d2 - d1)
 
 

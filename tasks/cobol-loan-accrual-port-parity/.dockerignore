@@ -5,3 +5,7 @@ task.toml
 README.md
 **/__pycache__/
 **/*.pyc
+.dockerignore
+Dockerfile
+environment/Dockerfile
+environment/.dockerignore

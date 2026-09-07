@@ -63,7 +63,7 @@ Things to know, from the ticket and the triage call:
 * Signed DISPLAY fields (`PIC S9...`) carry their sign as an overpunch on the last digit in
   both the input datasets and the output (see `docs/file-transfer-notes.md`).
 * The reviewer comments on PR-218 were closed without changes; the shadow run suggests they
-  should not have been. Check which copybook version the Python layouts were written against.
+  should not have been. Verify the port against the copybooks in `legacy/` as they stand today.
 * Expect several independent causes behind the same output field; a mismatch in one field is
   often the consequence of more than one defect.
 

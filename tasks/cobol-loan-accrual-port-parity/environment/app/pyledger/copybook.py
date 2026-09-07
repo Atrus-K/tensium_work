@@ -26,9 +26,8 @@ _ALPHA_RE = re.compile(r"^X(?:\((\d+)\))?$")
 
 _POS_OVERPUNCH = "{ABCDEFGHI"
 _NEG_OVERPUNCH = "}JKLMNOPQR"
-# Overpunch character -> digit.  Both zone tables are accepted so a stray negative
-# zone never aborts a run; the sign itself is not carried because loan balances and
-# payment amounts are never negative (see PR-218).
+# Overpunch character -> digit; both zone tables are accepted so an unexpected
+# zone never aborts a run (see docs/file-transfer-notes.md).
 _DECODE_OVERPUNCH: dict[str, int] = {}
 for _d in range(10):
     _DECODE_OVERPUNCH[_POS_OVERPUNCH[_d]] = _d

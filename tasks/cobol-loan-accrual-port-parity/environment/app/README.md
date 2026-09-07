@@ -15,7 +15,7 @@ pyledger/            the port
   layouts.py         record layouts mirroring legacy/copybooks/*.cpy
   copybook.py        PIC parser + fixed-width codec (DISPLAY, zoned, COMP-3)
   numeric.py         COBOL numeric helpers used by the calculators
-  dates.py           YYMMDD century window, INTEGER-OF-DATE arithmetic, 30/360, business-day roll
+  dates.py           YYMMDD date expansion, INTEGER-OF-DATE arithmetic, 30/360, business-day roll
   rates.py           RATETBL loading + tier lookup
   transactions.py    LNTRAN loading + payment application
   accrual.py         interest accrual for the period

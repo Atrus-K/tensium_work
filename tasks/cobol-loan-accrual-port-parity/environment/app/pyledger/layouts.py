@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .copybook import Layout
 
-# LNMAST.cpy -- loan master (ldsys-copybooks 2018 export).  120 bytes, no terminator.
+# LNMAST.cpy -- loan master.  120 bytes, no terminator.
 LNMAST = Layout(
     "LNMAST",
     [

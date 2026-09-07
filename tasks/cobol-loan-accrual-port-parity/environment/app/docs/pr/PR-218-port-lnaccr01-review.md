@@ -11,46 +11,46 @@
 
 ### Review thread
 
-**m.lindqvist** — `pyledger/numeric.py` L12
-> `round(value, 2)` — COBOL `ROUNDED` is round-half-away-from-zero, Python's `round`
-> is banker's rounding (half to even) and you're rounding a float. Have you checked a
-> `.xx5` case? Also, where a COMPUTE is *not* ROUNDED, COBOL truncates to the
-> receiving picture; I don't see a truncation anywhere.
+**m.lindqvist** — rounding
+> Are we certain every money result comes out the way the mainframe stores it — the
+> exact half-cent cases, and the intermediate values LNACCR01 stores without ROUNDED?
+> The October sample is 50 current accounts; I don't think it exercises either.
 
 **d.okonkwo**
-> Checked against the October sample, all 50 accrued amounts match to the cent. Float
-> error is way below a cent at these magnitudes. Will revisit if the shadow run shows
-> anything.
+> Checked against the October sample, all 50 accrued amounts match to the cent. Will
+> revisit if the shadow run shows anything.
 
 *Resolved by d.okonkwo — "verified, matches on our sample"*
 
 ---
 
-**m.lindqvist** — `pyledger/accrual.py` L31
-> The COBOL does this in two steps — `WS-DAILY-RATE` is `PIC 9V9(9)` and is stored
-> *before* the multiply. Doing `bal * rate / basis * days` in one expression is not the
-> same computation.
+**m.lindqvist** — accrual arithmetic
+> Have you walked the accrual through the COBOL working-storage items one by one rather
+> than as a formula? LNACCR01 does not compute it in a single statement, and with
+> ARITH(EXTEND) the order of stores matters.
 
 **d.okonkwo**
-> Mathematically identical; the difference is in the 10th decimal.
+> Mathematically identical; any difference would be far below a cent.
 
 *Resolved by d.okonkwo*
 
 ---
 
-**m.lindqvist** — `pyledger/copybook.py` L58
-> Overpunch decode: you map `}` and `J`–`R` to digits but never flip the sign. Fine as
-> long as nothing is negative, but `LM-PRIN-BAL` and `TR-AMOUNT` are both `S9`.
+**m.lindqvist** — signed fields
+> What happens to a signed DISPLAY field whose value is negative — on the way in and on
+> the way out? `LM-PRIN-BAL` and `TR-AMOUNT` are both `S9`, and the October sample has
+> none.
 
 **d.okonkwo**
-> Loan balances can't be negative and payments are positive. Left a comment.
+> Loan balances can't be negative and payments are positive.
 
 *Resolved by d.okonkwo*
 
 ---
 
-**r.patel** — `pyledger/dates.py` L22
-> `2000 + yy` — the master has originations from the 90s. Does LNACCR01 have a window?
+**r.patel** — two-digit years
+> The master has originations from the 90s. Have you checked how LNACCR01 expands a
+> two-digit year before it uses it?
 
 **d.okonkwo**
 > Only `LM-ORIG-DATE` could be that old and it isn't used for anything that matters in
@@ -60,9 +60,9 @@
 
 ---
 
-**m.lindqvist** — `pyledger/layouts.py` L20
-> Which copybook version is this? I remember a change to LNMAST a few years back that
-> reused some of the FILLER.
+**m.lindqvist** — copybook version
+> Which copybook version were these layouts generated from? I remember LNMAST changing
+> a few years back.
 
 **d.okonkwo**
 > `ldsys-copybooks/2018-export/LNMAST.cpy`, the only export on the share. Total length

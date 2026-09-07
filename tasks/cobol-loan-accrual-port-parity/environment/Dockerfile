@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-# The application is stdlib-only; pytest is pre-installed so the verifier never needs the network.
+# The application is stdlib-only; pytest is pre-installed so the image works fully offline.
 RUN pip install --no-cache-dir pytest==8.4.1
 WORKDIR /app
 COPY . /tmp/ctx

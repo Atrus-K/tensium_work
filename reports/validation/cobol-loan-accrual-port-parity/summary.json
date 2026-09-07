@@ -4,12 +4,12 @@
       "task": "cobol-loan-accrual-port-parity",
       "passed": true,
       "image": "tbval/cobol-loan-accrual-port-parity:validate",
-      "loc_changed": 213,
+      "loc_changed": 209,
       "files_changed": 9,
-      "solve_seconds": 0.3,
+      "solve_seconds": 0.4,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 6.0,
+        "seconds": 7.1,
         "reward": "0",
         "pytest": {
           "failed": 23,
@@ -19,7 +19,7 @@
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 6.0,
+        "seconds": 6.7,
         "reward": "1",
         "pytest": {
           "passed": 29,
@@ -135,7 +135,7 @@
         {
           "name": "instruction-nonempty",
           "passed": true,
-          "detail": "4791 chars"
+          "detail": "4793 chars"
         },
         {
           "name": "instruction-no-verifier-leak",
@@ -146,6 +146,16 @@
           "name": "instruction-no-network-deps",
           "passed": true,
           "detail": "urls: []"
+        },
+        {
+          "name": "workspace-no-verifier-references",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "workspace-no-hidden-fixture-names",
+          "passed": true,
+          "detail": ""
         },
         {
           "name": "dockerfile-no-tests-solution-copy",
@@ -160,7 +170,7 @@
         {
           "name": "docker-build(task-root-context)",
           "passed": true,
-          "detail": "0s; log: reports/validation/cobol-loan-accrual-port-parity/cobol-loan-accrual-port-parity.build-root.log"
+          "detail": "1s; log: reports/validation/cobol-loan-accrual-port-parity/cobol-loan-accrual-port-parity.build-root.log"
         },
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
@@ -169,6 +179,11 @@
         },
         {
           "name": "image-has-no-tests-or-solution",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "image-no-stray-files-outside-app",
           "passed": true,
           "detail": ""
         },
@@ -215,7 +230,7 @@
         {
           "name": "post-apply:loc-changed>100",
           "passed": true,
-          "detail": "loc_changed=213"
+          "detail": "loc_changed=209"
         },
         {
           "name": "post-apply:test.sh-exit-zero",
@@ -240,7 +255,7 @@
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "6.0s"
+          "detail": "6.7s"
         }
       ]
     }
@@ -249,7 +264,7 @@
   "n_pre_apply_fail_ok": 1,
   "n_post_apply_pass_ok": 1,
   "anomalous_tasks": [],
-  "loc_changed_p25": 213.0,
+  "loc_changed_p25": 209.0,
   "loc_changed_p25_gt_100": true,
   "all_passed": true
 }
