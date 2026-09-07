@@ -1,8 +1,11 @@
 # Validation summary
 
-Tasks: 1  |  pre-apply failures (required): 1  |  post-apply successes (required): 1
-LOC changed P25: 447.0  (criterion > 100: PASS)
+Tasks: 4  |  pre-apply failures (required): 4  |  post-apply successes (required): 4
+LOC changed P25: 372.75  (criterion > 100: PASS)
 
 | task | result | pre exit | pre reward | pre failed | post exit | post reward | post passed | LOC changed | files changed | solve s |
 |---|---|---|---|---|---|---|---|---|---|---|
-| claims-adjudication-audit-recalc | PASS | 1 | 0 | 50 | 0 | 1 | 65 | 447 | 10 | 0.4 |
+| bundlevault-pentest-remediation | PASS | 1 | 0 | 53 | 0 | 1 | 74 | 426 | 10 | 0.1 |
+| claims-adjudication-audit-recalc | PASS | 1 | 0 | 50 | 0 | 1 | 65 | 447 | 10 | 0.3 |
+| cobol-loan-accrual-port-parity | PASS | 1 | 0 | 23 | 0 | 1 | 29 | 213 | 9 | 0.3 |
+| recon-nightly-timeout-2291 | PASS | 1 | 0 | 21 | 0 | 1 | 32 | 826 | 15 | 0.7 |
