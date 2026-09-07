@@ -25,5 +25,5 @@ digest = "sha256:654ab19b0e1b9462f88b3655af9aabd573db303a542c6760c1bc919d3e596eb
 
 [[tasks]]
 name = "tensium/recon-nightly-timeout-2291"
-digest = "sha256:602d249ffa6b9e4b0ba763683b815d9bff549c1732fc11c86c6743a55a384387"
+digest = "sha256:8810f0b2f75c79c609e4a7b4bb87176f23bcb1d284b53552cb6081e064c3d27a"
 
