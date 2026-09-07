@@ -139,7 +139,31 @@ Test design rules:
   model in one session. Cross-cutting changes, subtle spec semantics, and
   root-cause (not symptom) fixes are the levers.
 
-## 8. Validation
+## 8. Leakage rules (strict)
+
+The agent sees only the built image and `instruction.md`. Nothing it can see may reveal
+the hidden tests, the reference solution, or the answer path.
+
+* **Allowed (evidence trail):** observed symptoms, reproduction steps, logs of the buggy
+  run, tickets that say what is wrong in business terms and what must be true afterwards,
+  normative specifications, data, reviews that raise concerns at behaviour level.
+* **Not allowed:** text that names the code-level cause or fix ("keys on `received_date`
+  instead of `loss_date`", "TODO: also clamp D2", "non-sargable lookup"), docstrings or
+  comments in buggy modules that describe the corrected behaviour, commented-out correct
+  code, unused-but-correct helpers that only need wiring, changelog lines that tie a defect
+  to a specific function; test/fixture names, ground-truth values, the number of tests,
+  references to `/tests`, `test.sh`, `solve.sh`, `reward.txt`, "hidden tests"; a correct
+  implementation reachable anywhere in the workspace (other modules, scripts, `.orig`,
+  `.pyc`, `__pycache__`, `.pytest_cache`, nested `.git`); build leftovers outside `/app`.
+* Keep realism: rewrite evidence to symptom level rather than deleting it, and keep
+  `instruction.md` (plus the normative spec files it points to) stating every behaviour the
+  tests check.
+
+`scripts/validate_task.py` enforces the mechanical part (verifier paths and hidden fixture
+names in the workspace, hidden files in the image, stray files outside `/app`); the
+symptom-versus-cause judgement is reviewed by hand or by the audit workflow.
+
+## 9. Validation
 
 ```bash
 # format + oracle pre/post-apply in separate clean containers + LOC measurement

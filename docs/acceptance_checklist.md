@@ -24,11 +24,11 @@ Legend: ✅ satisfied and machine-checked here · 📝 satisfied by construction
 |---|---|
 | Harbor dataset format; one directory per task; names only `[A-Za-z0-9._-]` | ✅ `dir-name-charset`, `dataset.toml` |
 | Six required files present | ✅ `file-present:*` |
-| instruction.md: clear, solvable from workspace, no network / changing APIs / time-sensitive info, no leaks | ✅ `instruction-*` checks + 📝 leak/overfit review |
+| instruction.md: clear, solvable from workspace, no network / changing APIs / time-sensitive info, no leaks | ✅ `instruction-*`, `workspace-no-verifier-references`, `workspace-no-hidden-fixture-names` checks + 📝 leak/overfit review and the strict leakage audit (`reports/review/`) |
 | task.toml parses; image/timeout/cpu/memory/disk match runtime and are numeric; no tokens | ✅ `toml-*` checks (validator runs containers with the declared cpu/memory limits); Harbor `TaskConfig` schema validation |
 | solve.sh: `bash -n`, runs unattended, does not touch test.sh / reward.txt | ✅ `bash-n`, `solve.sh-does-not-touch-verifier`, `post-apply:solve.sh-did-not-write-reward` |
 | test.sh: `bash -n`, real evaluation, explicit reward 1/0, no "no tests collected" anomalies | ✅ `test.sh-*`, `*:tests-collected*` |
-| Dockerfile builds with `docker build -f environment/Dockerfile .`; no tests/solution/answers copied; `.dockerignore` excludes tests/ and solution/ when `COPY .` is used | ✅ `docker-build(task-root-context)`, `docker-build(environment-context)`, `dockerfile-*`, `dockerignore-*`, `image-has-no-tests-or-solution` |
+| Dockerfile builds with `docker build -f environment/Dockerfile .`; no tests/solution/answers copied; `.dockerignore` excludes tests/ and solution/ when `COPY .` is used | ✅ `docker-build(task-root-context)`, `docker-build(environment-context)`, `dockerfile-*`, `dockerignore-*`, `image-has-no-tests-or-solution`, `image-no-stray-files-outside-app` |
 
 ## Oracle pre-/post-apply validation
 

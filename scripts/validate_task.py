@@ -178,6 +178,39 @@ def format_checks(task_dir: Path, rep: TaskReport) -> dict:
         urls = re.findall(r"https?://\S+", text)
         rep.add("instruction-no-network-deps", not urls, f"urls: {urls[:3]}")
 
+    # leakage: verifier paths / hidden-test names must not appear in anything the agent can see
+    app_dir = task_dir / "environment"
+    visible_files = [p for p in list(app_dir.rglob("*")) + [task_dir / "instruction.md"] if p.is_file() and p.suffix.lower() not in (".db", ".dat", ".bin", ".fwb", ".sqlite", ".png", ".gz", ".zip", ".pyc")]
+    verifier_re = re.compile(r"(/tests\b|tests/test_|\btest\.sh\b|\bsolve\.sh\b|reward\.txt|/logs/verifier|hidden tests?\b)", re.I)
+    hits = []
+    for p in visible_files:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in verifier_re.finditer(text):
+            hits.append(f"{p.relative_to(task_dir)}: {m.group(0)}")
+            break
+    rep.add("workspace-no-verifier-references", not hits, "; ".join(hits[:5]))
+    hidden_names = set()
+    app_names = {p.name for p in app_dir.rglob("*") if p.is_file()}
+    for sub in ("tests", "solution"):
+        for p in (task_dir / sub).rglob("*"):
+            if p.is_file() and p.name not in app_names and p.name not in ("test.sh", "solve.sh", "conftest.py", "__init__.py") and len(p.stem) >= 6:
+                hidden_names.add(p.stem)
+    name_hits = []
+    if hidden_names:
+        name_re = re.compile(r"\b(" + "|".join(sorted(re.escape(n) for n in hidden_names)) + r")\b")
+        for p in visible_files:
+            try:
+                text = p.read_text(errors="replace")
+            except OSError:
+                continue
+            m = name_re.search(text)
+            if m:
+                name_hits.append(f"{p.relative_to(task_dir)}: {m.group(0)}")
+    rep.add("workspace-no-hidden-fixture-names", not name_hits, "; ".join(name_hits[:5]))
+
     dockerfile = task_dir / "environment" / "Dockerfile"
     if dockerfile.is_file():
         d = dockerfile.read_text()
@@ -264,6 +297,23 @@ def run_test_sh(c: Container, tests_dir: Path, timeout: float) -> dict:
     }
 
 
+def stray_files_scan(image: str, task_dir: Path) -> tuple[bool, str]:
+    """Files outside /app that the base image does not have (build leftovers, verifier dirs, caches)."""
+    base = None
+    for ln in (task_dir / "environment" / "Dockerfile").read_text().splitlines():
+        if ln.strip().upper().startswith("FROM "):
+            base = ln.split()[1]
+            break
+    find_cmd = ("find / -xdev \\( -path /proc -o -path /sys -o -path /dev -o -path /app -o -path /usr -o -path /etc -o -path /var/lib -o -path /var/cache -o -path /var/log -o -path /bin -o -path /sbin -o -path /lib -o -path /lib64 \\) -prune -o -type f -print 2>/dev/null")
+    r = sh(["docker", "run", "--rm", "--entrypoint", "sh", image, "-c", find_cmd], timeout=600)
+    files = {ln for ln in r.stdout.splitlines() if ln.startswith("/") and ln != "/.dockerenv"}
+    if base:
+        rb = sh(["docker", "run", "--rm", "--entrypoint", "sh", base, "-c", find_cmd], timeout=600)
+        if rb.returncode == 0:
+            files -= {ln for ln in rb.stdout.splitlines()}
+    return not files, ("stray files: " + ", ".join(sorted(files)[:6])) if files else ""
+
+
 def leak_scan(image: str, task_dir: Path) -> tuple[bool, str]:
     """Look for tests/solution/verifier artifacts baked into the image."""
     find_cmd = (
@@ -313,6 +363,8 @@ def validate_task(task_dir: Path, report_dir: Path, build_flags: list[str], skip
 
     ok, detail = leak_scan(tag, task_dir)
     rep.add("image-has-no-tests-or-solution", ok, detail)
+    ok, detail = stray_files_scan(tag, task_dir)
+    rep.add("image-no-stray-files-outside-app", ok, detail)
 
     # ---- pre-apply: fresh container, tests only ----
     c = Container(tag, cpus, memory_mb)
