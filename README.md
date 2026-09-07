@@ -94,6 +94,20 @@ All four tasks pass every check in `scripts/validate_task.py` (43 checks per tas
 
 Categories covered: operations, security hardening / reverse-engineering, rewriting / cross-language migration, performance / algorithm optimisation. The incident-remediation, data-migration and STEM designs were not built in this version (see the design ranking for the judges' reasons).
 
+## Leakage controls
+
+The agent sees only the built image and `instruction.md`. Every task passed a strict leakage
+audit (`reports/review/README.md`, "Strict leakage audit"): three independent auditors per
+task hunted for answer-path text (comments, docstrings, tickets, reviews, changelogs that name
+the code-level cause or fix), hidden-test exposure (fixture names, golden values, verifier
+paths) and solve-by-copy material (correct code reachable in the workspace, caches, build
+leftovers, anything from `tests/` or `solution/` in the image); findings were fixed and a
+fresh-eyes verifier confirmed each task clean. Evidence-trail documents describe symptoms and
+requirements only; normative specifications state what correct behaviour is. Mechanical
+checks are enforced by `scripts/validate_task.py` (`workspace-no-verifier-references`,
+`workspace-no-hidden-fixture-names`, `image-has-no-tests-or-solution`,
+`image-no-stray-files-outside-app`) and the rules are in `docs/task_authoring_guide.md` §8.
+
 ## What is not covered here
 
 - The scaffold baseline (Step 3: avg@8 / pass@8 with Claude Code on Fable 5 / Opus 5 and
