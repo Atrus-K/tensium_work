@@ -9,22 +9,22 @@
       "solve_seconds": 0.7,
       "pre_apply": {
         "exit_code": 1,
-        "seconds": 152.0,
+        "seconds": 152.9,
         "reward": "0",
         "pytest": {
-          "failed": 20,
-          "passed": 3,
+          "failed": 21,
+          "passed": 4,
           "errors": 7,
-          "collected": 30
+          "collected": 32
         }
       },
       "post_apply": {
         "exit_code": 0,
-        "seconds": 12.3,
+        "seconds": 12.5,
         "reward": "1",
         "pytest": {
-          "passed": 30,
-          "collected": 30
+          "passed": 32,
+          "collected": 32
         }
       },
       "checks": [
@@ -136,7 +136,7 @@
         {
           "name": "instruction-nonempty",
           "passed": true,
-          "detail": "4950 chars"
+          "detail": "5985 chars"
         },
         {
           "name": "instruction-no-verifier-leak",
@@ -161,12 +161,12 @@
         {
           "name": "docker-build(task-root-context)",
           "passed": true,
-          "detail": "3s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-root.log"
+          "detail": "0s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-root.log"
         },
         {
           "name": "docker-build(environment-context, as Harbor builds it)",
           "passed": true,
-          "detail": "2s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-env.log"
+          "detail": "0s; log: reports/validation/recon-nightly-timeout-2291/recon-nightly-timeout-2291.build-env.log"
         },
         {
           "name": "image-has-no-tests-or-solution",
@@ -186,12 +186,12 @@
         {
           "name": "pre-apply:at-least-one-test-fails",
           "passed": true,
-          "detail": "{\"failed\": 20, \"passed\": 3, \"errors\": 7, \"collected\": 30}"
+          "detail": "{\"failed\": 21, \"passed\": 4, \"errors\": 7, \"collected\": 32}"
         },
         {
           "name": "pre-apply:tests-collected",
           "passed": true,
-          "detail": "{\"failed\": 20, \"passed\": 3, \"errors\": 7, \"collected\": 30}"
+          "detail": "{\"failed\": 21, \"passed\": 4, \"errors\": 7, \"collected\": 32}"
         },
         {
           "name": "post-apply:solve.sh-exit-zero",
@@ -231,17 +231,17 @@
         {
           "name": "post-apply:all-tests-pass",
           "passed": true,
-          "detail": "{\"passed\": 30, \"collected\": 30}"
+          "detail": "{\"passed\": 32, \"collected\": 32}"
         },
         {
           "name": "post-apply:tests-collected-not-all-skipped",
           "passed": true,
-          "detail": "{\"passed\": 30, \"collected\": 30}"
+          "detail": "{\"passed\": 32, \"collected\": 32}"
         },
         {
           "name": "post-apply:test.sh-within-verifier-timeout",
           "passed": true,
-          "detail": "12.3s"
+          "detail": "12.5s"
         }
       ]
     }
