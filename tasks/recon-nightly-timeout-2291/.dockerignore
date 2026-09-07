@@ -1,0 +1,11 @@
+tests/
+solution/
+instruction.md
+task.toml
+README.md
+**/__pycache__/
+**/*.pyc
+**/data/recon.db
+**/data/recon.db-wal
+**/data/recon.db-shm
+**/.pytest_cache/

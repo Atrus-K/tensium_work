@@ -18,3 +18,8 @@ jobs/
 .DS_Store
 .idea/
 .vscode/
+
+# Generated SQLite ledgers (rebuilt at image build time)
+tasks/*/environment/app/data/*.db
+tasks/*/environment/app/data/*.db-wal
+tasks/*/environment/app/data/*.db-shm

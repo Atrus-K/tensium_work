@@ -1,16 +1,19 @@
 """Rule B3 — batch payments (matching_rules.md section 4, B3).
 
-A run is a *contiguous* slice of the customer's available invoices in
-(due_date, id) order whose amounts sum to the payment, spans at most the
-configured window and has between min and max invoices. Earliest start wins,
-then the shortest run.
+Searches the customer's open invoices for a combination whose amounts sum to
+the payment. Customers with more than BATCH_SUBSET_CAP open invoices are
+skipped since PR-418 (the search is exponential in the number of invoices).
 """
 from __future__ import annotations
 
+import logging
+from itertools import combinations
 from typing import Sequence
 
-from recon.config import DEFAULT_CONFIG, MatchConfig
+from recon.config import BATCH_SUBSET_CAP, DEFAULT_CONFIG, MatchConfig
 from recon.models import Invoice
+
+log = logging.getLogger("recon.matching.batch")
 
 
 def oldest_first(invoices: Sequence[Invoice]) -> list[Invoice]:
@@ -20,25 +23,20 @@ def oldest_first(invoices: Sequence[Invoice]) -> list[Invoice]:
 def find_batch(
     invoices: Sequence[Invoice], amount_cents: int, config: MatchConfig = DEFAULT_CONFIG
 ) -> list[Invoice] | None:
-    """Return the winning run for ``amount_cents`` or None. Linear in runs, not subsets."""
+    """Return the invoices paid by ``amount_cents`` together, or None."""
     invs = oldest_first(invoices)
-    n = len(invs)
-    if n < config.batch_min_run:
+    if len(invs) < config.batch_min_run:
+        return None
+    if len(invs) > BATCH_SUBSET_CAP:
+        log.warning("batch: candidate set %d > %d, skipping (PR-418 cap)", len(invs), BATCH_SUBSET_CAP)
         return None
     tol = config.amount_tolerance_cents
-    prefix = [0] * (n + 1)
-    for idx, inv in enumerate(invs):
-        prefix[idx + 1] = prefix[idx] + inv.amount_cents
-    upper = amount_cents + tol
-    for i in range(n - config.batch_min_run + 1):
-        start_due = invs[i].due_date
-        last = min(n, i + config.batch_max_run)
-        for j in range(i + config.batch_min_run - 1, last):
-            if (invs[j].due_date - start_due).days > config.batch_window_days:
-                break
-            total = prefix[j + 1] - prefix[i]
-            if total > upper:
-                break  # amounts are positive: longer runs only grow
-            if abs(total - amount_cents) <= tol:
-                return invs[i : j + 1]
+    for size in range(config.batch_min_run, min(len(invs), config.batch_max_run) + 1):
+        for combo in combinations(invs, size):
+            total = sum(inv.amount_cents for inv in combo)
+            if abs(total - amount_cents) > tol:
+                continue
+            span = (max(inv.due_date for inv in combo) - min(inv.due_date for inv in combo)).days
+            if span <= config.batch_window_days:
+                return list(combo)
     return None

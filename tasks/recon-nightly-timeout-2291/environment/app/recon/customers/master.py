@@ -29,39 +29,31 @@ def load_customers(path: str | Path) -> list[Customer]:
     return customers
 
 
-class CustomerIndex:
-    """Lookups built once per run.
-
-    A normalised name carried by more than one customer identifies nobody
-    (section 2.2), so such names are dropped from the name index.
-    """
-
-    def __init__(self, customers: list[Customer]):
-        self.by_id: dict[int, Customer] = {c.customer_id: c for c in customers}
-        self._by_iban: dict[str, Customer] = {}
-        by_name: dict[str, set[int]] = {}
-        for cust in customers:
-            for iban in cust.ibans:
-                self._by_iban.setdefault(iban, cust)
-            for name in cust.names:
-                by_name.setdefault(normalize_reference(name), set()).add(cust.customer_id)
-        self._by_name: dict[str, Customer] = {
-            norm: self.by_id[next(iter(ids))] for norm, ids in by_name.items() if len(ids) == 1
-        }
-
-    def by_iban(self, iban: str) -> Customer | None:
-        if not iban:
-            return None
-        return self._by_iban.get(normalize_iban(iban))
-
-    def by_name(self, remitter: str) -> Customer | None:
-        if not remitter:
-            return None
-        return self._by_name.get(normalize_reference(remitter))
-
-    def __len__(self) -> int:
-        return len(self.by_id)
+def _iban_lookup(customers: list[Customer]) -> dict[str, Customer]:
+    table: dict[str, Customer] = {}
+    for cust in customers:
+        for iban in cust.ibans:
+            table.setdefault(iban, cust)
+    return table
 
 
-def build_customer_index(path: str | Path) -> CustomerIndex:
-    return CustomerIndex(load_customers(path))
+def _name_lookup(customers: list[Customer]) -> dict[str, Customer]:
+    """Normalised legal names and aliases; a name carried by several customers identifies nobody."""
+    owners: dict[str, set[int]] = {}
+    by_id = {c.customer_id: c for c in customers}
+    for cust in customers:
+        for name in cust.names:
+            owners.setdefault(normalize_reference(name), set()).add(cust.customer_id)
+    return {norm: by_id[next(iter(ids))] for norm, ids in owners.items() if len(ids) == 1}
+
+
+def identify_by_iban(iban: str, customers_path: str | Path) -> Customer | None:
+    if not iban:
+        return None
+    return _iban_lookup(load_customers(customers_path)).get(normalize_iban(iban))
+
+
+def identify_by_name(remitter: str, customers_path: str | Path) -> Customer | None:
+    if not remitter:
+        return None
+    return _name_lookup(load_customers(customers_path)).get(normalize_reference(remitter))

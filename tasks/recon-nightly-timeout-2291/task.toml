@@ -1,0 +1,24 @@
+schema_version = "1.4"
+
+[task]
+name = "tensium/recon-nightly-timeout-2291"
+version = "1.0.0"
+description = "Make the recon nightly payment reconciliation finish for tenant Nordwind (12,000 statement lines vs 34,000 open invoices) by fixing the root causes across candidate search, fuzzy matching, SQLite access, schema, customer master loading and rule B3, without changing matching results or the report/DB contract."
+keywords = ["python", "performance", "sqlite", "reconciliation", "payments", "incident", "algorithm-optimization"]
+
+[metadata]
+category = "performance / algorithm optimisation"
+difficulty = "hard"
+source = "manually constructed by domain experts; evidence trail in environment/app/docs, environment/app/logs, environment/app/profiles"
+
+[verifier]
+timeout_sec = 900.0
+
+[agent]
+timeout_sec = 2700.0
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 2
+memory_mb = 2048
+storage_mb = 4096

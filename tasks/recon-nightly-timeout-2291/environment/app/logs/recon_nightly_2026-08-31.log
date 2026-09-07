@@ -1,0 +1,40 @@
+# recon-nightly on fin-batch-02, statement nordwind_2026-08.csv, --log-level DEBUG
+# excerpt: the full log was 1.9 GB; runs of identical "sqlite3 connect" lines are collapsed.
+2026-09-01 00:00:04,118 INFO recon.pipeline: stage=parse lines=12000 elapsed=0.211s
+2026-09-01 00:00:04,119 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:04,127 INFO recon.store: migrating schema 0 -> 1
+2026-09-01 00:00:04,131 DEBUG recon.pipeline: line=NW-2026-08-000001 tokens=['RE20261199'] customer_iban=1091 customer_name=1091
+2026-09-01 00:00:04,131 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:04,146 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:04,146 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:04,147 DEBUG recon.store: sqlite3 connect data/recon.db
+    [... 39,534 identical lines omitted ...]
+2026-09-01 00:00:09,802 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:09,803 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:09,807 DEBUG recon.pipeline: line=NW-2026-08-000002 tokens=[] customer_iban=2996 customer_name=2996
+2026-09-01 00:00:09,808 DEBUG recon.store: sqlite3 connect data/recon.db
+    [... 39,537 identical lines omitted ...]
+2026-09-01 00:00:15,492 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:15,493 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 00:00:15,504 DEBUG recon.pipeline: line=NW-2026-08-000003 tokens=[] customer_iban=2903 customer_name=2903
+    [... 1,204,113 lines omitted ...]
+2026-09-01 00:02:52,341 WARNING recon.matching.batch: batch: candidate set 41 > 12, skipping (PR-418 cap)
+    [... 2,077,650 lines omitted ...]
+2026-09-01 00:07:31,090 WARNING recon.matching.batch: batch: candidate set 38 > 12, skipping (PR-418 cap)
+    [... 3,116,215 lines omitted ...]
+2026-09-01 00:14:28,772 WARNING recon.matching.batch: batch: candidate set 23 > 12, skipping (PR-418 cap)
+    [... 17,811,944 lines omitted ...]
+2026-09-01 00:47:02,915 INFO recon.pipeline: match: 500 lines processed
+    [... 4,509,220 lines omitted ...]
+2026-09-01 00:57:11,406 WARNING recon.matching.batch: batch: candidate set 27 > 12, skipping (PR-418 cap)
+    [... 16,206,334 lines omitted ...]
+2026-09-01 01:34:09,533 INFO recon.pipeline: match: 1000 lines processed
+    [... 10,987,012 lines omitted ...]
+2026-09-01 01:58:40,207 WARNING recon.matching.batch: batch: candidate set 19 > 12, skipping (PR-418 cap)
+2026-09-01 01:58:40,208 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 01:58:40,209 DEBUG recon.store: sqlite3 connect data/recon.db
+    [... 584,371 lines omitted ...]
+2026-09-01 02:00:04,002 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 02:00:04,002 DEBUG recon.store: sqlite3 connect data/recon.db
+2026-09-01 02:00:04,011 ERROR watchdog: recon-nightly pid 41877 exceeded 7200s (stage=match, 1274 of 12000 lines), sending SIGKILL
+2026-09-01 02:00:04,240 ERROR watchdog: recon-nightly exited with signal 9; no reports written to /var/recon/out/2026-08-31

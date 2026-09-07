@@ -1,4 +1,7 @@
--- recon ledger, schema version 1 (baseline). Later versions live in recon/store/migrations.py.
+-- recon ledger, schema version 1. Later versions go through recon/store/migrations.py.
+--
+-- TODO(perf): reference lookups are non-sargable (Repository.invoices_by_reference
+-- normalises inside the WHERE clause) and there are no secondary indexes yet.
 
 CREATE TABLE IF NOT EXISTS customers (
     customer_id  INTEGER PRIMARY KEY,
