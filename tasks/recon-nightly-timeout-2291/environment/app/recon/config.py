@@ -19,7 +19,7 @@ class MatchConfig:
 
 DEFAULT_CONFIG = MatchConfig()
 
-# PR-418 hotfix (INCIDENT-2291): the subset search in matching/batch.py is
-# exponential, so customers with more open invoices than this are skipped.
-# Follow-up ticket to replace the search was promised in the review.
+# PR-418 hotfix (RECON-2288): rule B3 is skipped (with a warning) for customers
+# with more open invoices than this. See docs/pr-418-review.md; follow-up
+# tracked as RECON-2302.
 BATCH_SUBSET_CAP = 12

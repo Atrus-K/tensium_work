@@ -23,9 +23,9 @@ subsets is fine. Unit tests unchanged (the toy customer has 5 invoices).
 > of the customer's invoices that sums to the payment". It says: sort the
 > customer's available invoices oldest first (due date, then id), and a run is
 > a **contiguous slice** of that order, 2–40 invoices, within 60 days, earliest
-> start wins. That is a linear/quadratic scan, not a subset search. The
-> combinations approach was always the wrong algorithm; it just happened to
-> return the same answer for tiny customers.
+> start wins. Nothing in there says "subset". I would not bet that what we
+> ship today returns the spec's answer for anyone but the five-invoice toy
+> customer in the unit test.
 
 **s.okafor** — 2026-08-14 15:05
 > With the cap we silently stop matching batch payments for exactly the
@@ -35,17 +35,17 @@ subsets is fine. Unit tests unchanged (the toy customer has 5 invoices).
 
 **j.reuter** — 2026-08-14 15:41
 > Agreed on all points. The hang is blocking the close tonight, so I'd like to
-> merge the cap as a stop-gap and rewrite `find_batch` as the contiguous-run
-> scan in a follow-up. I opened RECON-2302 for that and linked the spec
-> section. Is that OK?
+> merge the cap as a stop-gap and bring rule B3 in line with section 4 in a
+> follow-up. I opened RECON-2302 for that and linked the spec section. Is
+> that OK?
 
 **s.okafor** — 2026-08-14 16:10
 > OK as a stop-gap, with two conditions: (1) the warning must name the cap so
 > we can grep for it, (2) RECON-2302 gets done before the Nordwind onboarding
-> — they have several customers with 20+ open invoices. Also note for the
-> follow-up: the window check in the current code compares the min and max due
-> date of the subset, which is only coincidentally the same thing as the
-> spec's `I[j].due_date − I[i].due_date` once runs are contiguous.
+> — they have several customers with 20+ open invoices. Also for the
+> follow-up: the 60-day window has to be checked exactly as section 4 words
+> it; please add a unit test for a run that sits right on the boundary, I
+> would not trust the current check without one.
 
 **m.hartmann** — 2026-08-14 16:30
 > From the finance side: the "earliest start wins" rule is not decoration.

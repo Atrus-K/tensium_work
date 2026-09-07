@@ -39,16 +39,17 @@ if you do run anything against `data/recon.db` itself, rebuild it afterwards.
 1. **Performance.** The full statement (12,000 lines against ~34,000 open
    invoices and 3,000 customers) completes with exit code 0 in **under 60
    seconds** on a 2-vCPU machine such as the batch box `fin-batch-02` (this
-   workspace's environment, 2 vCPU / 2 GB, is the reference). A statement of
-   1,500 lines in the same format must also finish in that time. The run must
+   workspace's environment, 2 vCPU / 2 GB, is the reference). The same budget
+   applies to any other tenant's statement in the same format against the
+   same ledger (the older tenants export a fraction of Nordwind's volume,
+   ~1,500 lines a month) — do not tune to the shipped file. The run must
    not query the ledger per candidate invoice and must not open a new
    connection per statement line: a full run may execute **at most 300,000
    SQL statements** in total (counted as individual statement executions, so
    an `executemany` over N rows counts N, and `BEGIN`/`COMMIT`/`PRAGMA` count
    too; the current code executes hundreds of millions) and may open **at
    most 100 SQLite connections** (the current code opens one per candidate
-   invoice). A solution that loads or indexes what it needs up front is
-   expected. Any solution must work for other statements in the same format
+   invoice). Any solution must work for other statements in the same format
    against the same ledger, not just the shipped file.
 
 2. **Correctness — `docs/matching_rules.md` is the contract.** Every line's

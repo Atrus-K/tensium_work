@@ -87,12 +87,13 @@ customers.
 
 ## Notes from the payments team stand-up (2026-09-02)
 
-* The matcher was written when tenants had a few hundred invoices; nobody
-  re-examined the per-line ledger scan or the per-call `sqlite3.connect`.
-* `schema.sql` still carries the `TODO(perf)` about non-sargable reference
-  lookups from the first release.
-* The customer master used to be 80 rows; reloading it "when needed" was
-  free then.
+* The matcher was written when tenants had a few hundred invoices; until this
+  week nobody had profiled it at Nordwind's ledger size.
+* The `lookup` miss for references typed in another format (acceptance
+  criterion 6) was already reported by the finance desk in the first release
+  and never got a ticket.
+* The customer master used to be 80 rows; 3,000 is new territory for the
+  customer identification step.
 * Whatever we do to the schema must migrate the existing `data/recon.db`
   automatically at startup (ops will not run manual SQL) and must be a no-op
   when run again.
