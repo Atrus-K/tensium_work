@@ -27,13 +27,14 @@ agree with CH-7.
   2500). Gross ACV 5032.00, indemnity 2532.00, 24 days late, interest 29.97.
 * Recomputed: the loss occurred on 2024-05-30, before the renewal took effect,
   so **PV-1001-A** (deductible 1000) governs (CH-7 §1.1, §1.2). Gross ACV
-  4787.00 — the engine also under-depreciated the 14-month-old laptop and the
-  18-month-old camera by treating age in whole years (§3.1/§3.3) — indemnity
-  **3787.00**. TX clock: proof of loss Mon 2024-06-03 + 5 business days =
-  2024-06-10 → 20 days late → interest **37.35**.
+  4787.00 — the 14-month-old laptop and the 18-month-old camera also carry
+  less depreciation than §3.1/§3.3 give them — indemnity **3787.00**. TX
+  clock: proof of loss Mon 2024-06-03 + 5 business days = 2024-06-10 → 20 days
+  late → interest **37.35**.
 * Impact: indemnity short by 1255.00; interest short by 7.38.
-* Note: the claim was *received* on 2024-06-03, which is the date the engine
-  appears to key on.
+* Note: the claim was reported on 2024-05-31 and received on 2024-06-03, both
+  after the renewal took effect; neither date bears on which version governs
+  (§1.2).
 
 ## Finding 2 — CLM-24-0603 (P-1002, TX, theft, loss 2024-05-01) — PAID WITHOUT COVERAGE
 
@@ -52,9 +53,8 @@ agree with CH-7.
   8470.00.
 * Recomputed: PV-1003-A carries a 2 % wind/hail deductible; dwelling limit
   600 000 → deductible **12 000.00** for a hail loss (§4.3). Gross ACV is
-  12 645.00 once depreciation is capped at the schedule maximum (garage tools,
-  96 months: 50 % cap, not 80 %) and counted in months (§3.3) → indemnity
-  **645.00**.
+  12 645.00 once the line items are depreciated per §3.1–§3.3 (garage tools at
+  96 months: 50 %, not 80 %) → indemnity **645.00**.
 * Impact: over-paid 7825.00.
 
 ## Finding 4 — CLM-24-0606 (P-1005, FL, theft, loss 2024-06-02) — OVER-PAID
@@ -91,8 +91,8 @@ agree with CH-7.
   months → 5 % → 1187.50; nightstand 5 months → no depreciation → 300.00;
   refrigerator 183 months → capped at 65 % → 840.00; clothing 4 months →
   1600.00. Gross **5782.50**, indemnity **4782.50**.
-* Impact: under-paid 532.50. The engine depreciates in whole years and has no
-  cap; a 15-year-old appliance was written down to nothing.
+* Impact: under-paid 532.50. Items under a year old were not depreciated at
+  all, while a 15-year-old appliance was written down to nothing.
 
 ## Finding 7 — CLM-24-0617 (P-1015, NY, supplemental on OCC-24-0305) — OVER-PAID / LIMIT BREACHED
 
@@ -112,20 +112,20 @@ agree with CH-7.
 None of the interest figures in the export could be reproduced from
 `data/prompt_pay_rules.json` and CH-7 §6. Representative cases:
 
-| claim | state | engine | recomputed | why |
-|---|---|---|---|---|
-| CLM-24-0608 | OH | 37 days late, interest 9.17 | interest **0.00** | OH statute imposes no interest (`interest_applies: false`) |
-| CLM-24-0610 | NY | 40 days late, 20.02 | 21 days late, **11.00** | NY clock starts at proof of loss (2024-05-10), 30 calendar days → 2024-06-09 |
-| CLM-24-0611 | TX | 37 days late, 36.31 | 31 days late, **30.65** | TX clock starts at proof of loss (Wed 2024-05-22); 5 business days excluding the weekend and Memorial Day → 2024-05-30 |
-| CLM-24-0612 | CA | 1 day late, 0.82 | not late, **0.00** | proof of loss 2024-05-25 + 40 calendar days = 2024-07-04 |
-| CLM-24-0630 | FL | 33 days late, 23.43 | 31 days late, **18.65** | FNOL 2024-05-01 + 20 business days, Memorial Day excluded → 2024-05-30; indemnity also differs |
+| claim | state | engine | finding |
+|---|---|---|---|
+| CLM-24-0608 | OH | 37 days late, interest 9.17 | OH imposes no statutory interest (`interest_applies: false`); nothing is owed |
+| CLM-24-0610 | NY | 40 days late, 20.02 | NY clock starts at proof of loss (2024-05-10), 30 calendar days; the engine's 2024-05-21 deadline is too early and the interest is overstated |
+| CLM-24-0611 | TX | 37 days late, 36.31 | TX clock starts at proof of loss (Wed 2024-05-22), 5 business days excluding the weekend and Memorial Day; the engine's 2024-05-24 deadline is too early, days late and interest both overstated |
+| CLM-24-0612 | CA | 1 day late, 0.82 | proof of loss 2024-05-25 + 40 calendar days falls after the payment date; no interest is owed |
+| CLM-24-0630 | FL | 33 days late, 23.43 | FNOL 2024-05-01 + 20 business days with Memorial Day excluded; the engine's 2024-05-28 deadline is too early; indemnity also differs |
 
-Pattern: the engine starts every clock at FNOL regardless of the state's
-`clock_start`, ignores `interest_applies`, and its business-day count appears to
-include the start day and to ignore the holiday table (Memorial Day 05-27 and
-Juneteenth 06-19 both fall inside the June windows). Recomputed interest uses
-the recomputed indemnity, the statutory rate, actual days late / 365, rounded
-half-up (§6.3, §7).
+Pattern: every engine deadline we checked falls on or before the statutory one,
+so `days_late` is overstated wherever they differ; OH claims accrued interest
+although the OH statute imposes none; and the business-day windows that span
+Memorial Day (05-27) or Juneteenth (06-19) end earlier than CH-7 §6.1 gives.
+Interest must be computed on the corrected indemnity at the statutory rate,
+actual days late / 365, rounded half-up (§6.3, §7).
 
 ## Requested action
 

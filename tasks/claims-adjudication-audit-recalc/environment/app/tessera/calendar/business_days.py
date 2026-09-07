@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Iterable
 
 WEEKEND = (5, 6)
 
@@ -11,7 +10,7 @@ def is_business_day(day: date) -> bool:
     return day.weekday() not in WEEKEND
 
 
-def add_business_days(start: date, n: int, holidays: Iterable[date] = ()) -> date:
+def add_business_days(start: date, n: int) -> date:
     """The date reached after counting *n* business days from *start*."""
     if n < 0:
         raise ValueError("n must be non-negative")

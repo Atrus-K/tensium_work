@@ -5,3 +5,13 @@ task.toml
 README.md
 **/__pycache__/
 **/*.pyc
+reports/
+.git/
+**/.pytest_cache/
+**/out/
+**/*.db
+**/*.orig
+**/*.bak
+**/*.rej
+**/*.swp
+**/*~

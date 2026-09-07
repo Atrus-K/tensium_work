@@ -1,9 +1,7 @@
 """Select the policy version that applies to a claim.
 
-The version whose in-force period contains the date the claim was received for
-adjudication is used.  Since PLAT-355 a claim that matches no version no longer
-aborts the batch: we fall back to the policy's latest version and log a WARN so
-the batch can complete and the case can be reviewed afterwards.
+PLAT-355: a claim whose policy has no matching version no longer aborts the
+batch; the run completes and logs a WARN so the case can be reviewed afterwards.
 """
 from __future__ import annotations
 

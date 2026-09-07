@@ -37,12 +37,12 @@ Examples
 
 | versions | loss date | in force |
 |---|---|---|
-| A: 2023-06-01 → 2024-06-01, B: 2024-06-01 → 2025-06-01 | 2024-05-30 | A |
-| A: 2023-06-01 → 2024-06-01, B: 2024-06-01 → 2025-06-01 | 2024-06-01 | B |
-| A: 2023-05-01 → 2024-05-01 (never renewed) | 2024-05-01 | none → `no_coverage` |
-| A: 2023-05-01 → 2024-05-01 | 2024-04-30 | A (even if reported in June) |
-| A: 2023-03-01 → 2024-03-01, B: 2024-04-15 → 2025-04-15 | 2024-03-20 | none (lapse gap) → `no_coverage` |
-| B: 2024-06-01 → (open) | 2031-01-01 | B |
+| A: 2023-08-01 → 2024-08-01, B: 2024-08-01 → 2025-08-01 | 2024-07-30 | A |
+| A: 2023-08-01 → 2024-08-01, B: 2024-08-01 → 2025-08-01 | 2024-08-01 | B |
+| A: 2023-02-01 → 2024-02-01 (never renewed) | 2024-02-01 | none → `no_coverage` |
+| A: 2023-02-01 → 2024-02-01 | 2024-01-31 | A (even if reported months later) |
+| A: 2023-09-01 → 2024-09-01, B: 2024-10-15 → 2025-10-15 | 2024-09-20 | none (lapse gap) → `no_coverage` |
+| B: 2024-08-01 → (open) | 2031-01-01 | B |
 
 ## 2. Occurrences, original and supplemental claims
 
@@ -114,7 +114,7 @@ Worked examples (electronics: 20 %/yr, max 70 %, min 6 months; appliances:
 | dresser | 1250.00 | 2023-12-10 | 2024-06-10 | 6 | 5 % | 1187.50 |
 | nightstand | 300.00 | 2023-12-11 | 2024-06-10 | 5 | 0 (under 6 months) | 300.00 |
 | refrigerator | 2400.00 | 2009-03-05 | 2024-06-10 | 183 | min(65, 190.625) = 65 % | 840.00 |
-| side table | 100.30 | 2023-12-15 | 2024-06-15 | 6 | 5 % → 95.285 | 95.29 |
+| side table | 120.30 | 2023-12-15 | 2024-06-15 | 6 | 5 % → 114.285 | 114.29 |
 
 ## 4. Order of operations for a covered claim
 
@@ -209,15 +209,15 @@ Prompt-pay parameters are per state (`prompt_pay_rules.json`):
   holidays table. **The clock start date itself is never counted**; counting
   begins with the next day.
 
-Example (TX: proof_of_loss, 5 business days): proof of loss Wed 2024-05-22 →
-Thu 23 (1), Fri 24 (2), Sat/Sun skipped, Mon 27 Memorial Day skipped, Tue 28
-(3), Wed 29 (4), Thu 30 (5) → deadline **2024-05-30**.
+Example (TX: proof_of_loss, 5 business days): proof of loss Thu 2024-05-23 →
+Fri 24 (1), Sat/Sun skipped, Mon 27 Memorial Day skipped, Tue 28 (2), Wed 29
+(3), Thu 30 (4), Fri 31 (5) → deadline **2024-05-31**.
 
-Example (FL: fnol, 20 business days): FNOL Wed 2024-05-01 → deadline
-2024-05-30 (Memorial Day skipped).
+Example (FL: fnol, 20 business days): FNOL Thu 2024-05-02 → deadline
+2024-05-31 (Memorial Day skipped).
 
-Example (NY: proof_of_loss, 30 calendar days): proof of loss 2024-05-10 →
-deadline 2024-06-09.
+Example (NY: proof_of_loss, 30 calendar days): proof of loss 2024-05-12 →
+deadline 2024-06-11.
 
 If the clock-start date the state's rule requires is absent (for example the
 proof of loss has not been received), the clock has not started: there is no
@@ -236,14 +236,14 @@ indemnity is 0. Interest is computed on the indemnity only (never on gross ACV
 or on the deductible) and is paid in addition to the indemnity
 (`payment_total = indemnity + interest`).
 
-Example: indemnity 2005.00, TX 18 %, 31 days late → 2005 × 0.18 × 31 / 365 =
-30.6526… → **30.65**.
+Example: indemnity 3150.00, TX 18 %, 23 days late → 3150 × 0.18 × 23 / 365 =
+35.7287… → **35.73**.
 
 ## 7. Money and rounding
 
 All monetary arithmetic is exact decimal arithmetic (no binary floating point).
 Whenever a rule says "rounded to cents" the rounding mode is **half-up** (half
-away from zero): 95.285 → 95.29, 185.185 → 185.19, 37.3495 → 37.35. Values are
+away from zero): 114.285 → 114.29, 222.185 → 222.19, 37.3495 → 37.35. Values are
 rounded exactly where the rules say so — per line ACV (3.4), the percentage
 deductible (4.3), interest (6.3) — and nowhere else; sums of rounded amounts are
 not re-rounded. Exports and ledger records carry two decimals.

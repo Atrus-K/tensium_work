@@ -21,7 +21,7 @@ class PromptPayOutcome:
 
 
 def payment_deadline(claim: Claim, rule: PromptPayRule) -> date:
-    """Deadline counted from first notice of loss per the state's day type."""
+    """Prompt-pay deadline for the claim under the state's rule."""
     if rule.day_type == "business":
         return add_business_days(claim.fnol_date, rule.deadline_days)
     return add_calendar_days(claim.fnol_date, rule.deadline_days)

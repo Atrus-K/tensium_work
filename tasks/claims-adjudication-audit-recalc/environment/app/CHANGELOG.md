@@ -6,8 +6,8 @@
 
 ## 0.7.1 — 2024-04-16
 * depreciation: switch from the hard-coded per-category table to
-  `data/depreciation_schedule.csv` (adds `max_pct` and `min_age_months`
-  columns supplied by product; consumers to follow) (PLAT-388).
+  `data/depreciation_schedule.csv` (column layout supplied by product)
+  (PLAT-388).
 
 ## 0.7.0 — 2024-03-22
 * add supplemental claim support: claims carry an `occurrence_id`, payments
@@ -16,9 +16,10 @@
 * export: add `sublimit_reduction` and `days_late` columns for audit.
 
 ## 0.6.3 — 2024-02-09
-* lookup: fall back to the latest policy version with a WARN instead of
-  crashing the batch when no version matches (PLAT-355, hotfix after the
-  January batch aborted on a renewal-in-flight policy).
+* batch no longer aborts when a claim's policy has no version matching on the
+  lookup date; the claim is adjudicated with a WARN so the run completes and
+  the case can be reviewed afterwards (PLAT-355, hotfix after the January
+  batch aborted on a renewal-in-flight policy).
 
 ## 0.6.2 — 2024-01-18
 * business_days helper added for the SLA dashboard (PLAT-340).
